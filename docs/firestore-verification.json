@@ -1,0 +1,17 @@
+{
+  "storage": "firestore-emulator",
+  "host": "127.0.0.1:8080",
+  "project": "demo-solar-review",
+  "checks": {
+    "seed_crud": "passed",
+    "pvlib_analysis_and_chunk_roundtrip": "passed",
+    "immutable_snapshot_duplicate_export": "passed",
+    "persistence_after_reconnect": "passed",
+    "cascade_delete": "passed"
+  },
+  "full_run_bytes": 1081898,
+  "chunk_count": 4,
+  "annual_kwh": 918845.1214320024,
+  "hourly_rows": 8760,
+  "status": "passed"
+}

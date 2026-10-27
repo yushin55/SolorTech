@@ -1,0 +1,24 @@
+.env
+.env.*
+!.env.example
+**/.venv/
+**/node_modules/
+**/__pycache__/
+**/.pytest_cache/
+**/*.pyc
+frontend/dist/
+backend/data/
+.firebase/
+.firebase-data/
+*-debug.log
+*.log
+*.tsbuildinfo
+firebase-service-account*.json
+service-account*.json
+
+# 원본 데이터 (보안: 저장소에 올리지 않음)
+아산 태양광 발전량/
+*.csv
+*.xls
+*.xlsx
+*.pdf

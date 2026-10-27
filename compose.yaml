@@ -1,0 +1,63 @@
+name: solar-water-workbench
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
+      LOCAL_DB_PATH: /app/data/solar.sqlite3
+      SEED_DEMO: ${SEED_DEMO:-true}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5174,http://127.0.0.1:5174}
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-demo-solar-local}
+      FIRESTORE_COLLECTION_PREFIX: ${FIRESTORE_COLLECTION_PREFIX:-solar_}
+      FIRESTORE_EMULATOR_HOST: ${FIRESTORE_EMULATOR_HOST:-}
+    volumes:
+      - solar-data:/app/data
+    depends_on:
+      firebase:
+        condition: service_healthy
+        required: false
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "127.0.0.1:5174:5174"
+    environment:
+      API_PROXY_TARGET: http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  firebase:
+    profiles: ["firebase"]
+    build:
+      context: .
+      dockerfile: docker/firebase.Dockerfile
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:4000:4000"
+    environment:
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-demo-solar-local}
+    volumes:
+      - firebase-data:/data
+      - firebase-cache:/root/.cache/firebase
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('net').connect(8080,'127.0.0.1');s.on('connect',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),3000)"]
+      interval: 5s
+      timeout: 4s
+      retries: 60
+      start_period: 30s
+    stop_grace_period: 45s
+
+volumes:
+  solar-data:
+  firebase-data:
+  firebase-cache:

@@ -1,0 +1,22 @@
+{
+  "checks": [
+    "project/candidate/design creation and actual analysis",
+    "duplicate/update/recalculate, distinct outputs, immutable previous snapshots",
+    "downloadable monthly/cash-flow CSV",
+    "CSV preview/metadata/time interval validation and persistence",
+    "deep project duplication with preserved analysis snapshots",
+    "cascade deletion of only the test-created projects"
+  ],
+  "run_a": {
+    "capacity_dc_kw": 660.0,
+    "annual_kwh": 918845.1214320024,
+    "bc": 1.7907088644734686
+  },
+  "run_b": {
+    "capacity_dc_kw": 825.0,
+    "annual_kwh": 1172016.008731265,
+    "bc": 2.023182522530224
+  },
+  "csv_valid_rows": 744,
+  "demo_designs_calculated": 4
+}

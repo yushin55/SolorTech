@@ -1,0 +1,32 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "백엔드: FastAPI (F5)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/backend/.venv/Scripts/python.exe",
+      "module": "uvicorn",
+      "args": [
+        "app.main:app",
+        "--host", "127.0.0.1",
+        "--port", "8000",
+        "--reload"
+      ],
+      "cwd": "${workspaceFolder}/backend",
+      "console": "integratedTerminal",
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      },
+      "justMyCode": true,
+      "subProcess": true,
+      "linux": {
+        "python": "${workspaceFolder}/backend/.venv/bin/python"
+      },
+      "osx": {
+        "python": "${workspaceFolder}/backend/.venv/bin/python"
+      }
+    }
+  ]
+}

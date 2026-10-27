@@ -1,0 +1,9 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // All application access goes through the local FastAPI server / Admin SDK.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
