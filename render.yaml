@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: soomyeon-api
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./deploy/backend.Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    envVars:
+      - key: STORAGE_BACKEND
+        value: local
+      - key: SEED_DEMO
+        value: "true"
+      - key: GEOCODING_PROVIDER
+        value: local
+      - key: WATER_PROVIDER
+        value: overpass
