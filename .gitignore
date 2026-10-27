@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+**/.venv/
+**/node_modules/
+**/__pycache__/
+**/.pytest_cache/
+**/*.pyc
+frontend/dist/
+backend/data/
+.firebase/
+.firebase-data/
+*-debug.log
+*.log
+*.tsbuildinfo
+firebase-service-account*.json
+service-account*.json
