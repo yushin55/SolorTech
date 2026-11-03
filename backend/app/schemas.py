@@ -135,6 +135,11 @@ class Finance(StrictModel):
     self_use_kwh: NonNegative = 0
     retail_price: NonNegative = 0
     stress_pcts: list[float] = Field(default_factory=lambda: [5, 10], max_length=6)
+    # 자금 조달 (선택): 0% = 전액 자기자본. B/C·NPV·IRR은 가이드라인대로 비차입 기준을 유지한다.
+    loan_pct: float = Field(default=0, ge=0, le=100)
+    loan_rate_pct: float = Field(default=4.5, ge=0, le=50)
+    loan_years: int = Field(default=10, ge=1, le=50)
+    grace_years: int = Field(default=0, ge=0, le=20)
 
     @field_validator("stress_pcts")
     @classmethod

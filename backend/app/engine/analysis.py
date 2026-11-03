@@ -278,9 +278,15 @@ def run_analysis(snapshot):
         "부유체·계류·전기·토목·설계·계통 단가와 유지관리비는 가이드라인에 없는 사용자 견적 가정입니다.",
         "인버터 교체비는 표 3-12 구매비를 교체연도에 1회 반영합니다.",
         "B/C = 유입 현재가치 ÷ 유출 현재가치. 연말 세전 비차입 현금흐름이며 금융·세금·물가·잔존가치는 제외합니다.",
-        "필요 판매단가 = 유출 현재가치 ÷ 할인 판매전력량 (B/C = 1이 되는 단가). 입찰가 결정이 아닌 후보지 비교용입니다.",
+        "필요 판매단가 = 유출 현재가치 ÷ 할인 판매전력량 (B/C = 1이 되는 단가, 균등화발전원가 LCOE와 같은 정의). "
+        "입찰가 결정이 아닌 후보지 비교용입니다.",
         distance_basis,
     ]
+    if economics.get("financing"):
+        loan = economics["financing"]
+        assumptions.append(f"자금 조달(사용자 가정): 총 공사비의 {loan['loan_pct']:g}% 융자, 연 {loan['loan_rate_pct']:g}%, "
+                           f"거치 {loan['grace_years']}년 후 {loan['loan_years']}년 원리금균등 상환. "
+                           "자기자본 IRR·DSCR에만 쓰이며 B/C·NPV·IRR은 비차입 기준입니다.")
     if use_calibrated:
         assumptions.append(f"발전량은 {calibrated['model_label']} 결과이며, 범위는 {calibrated['band_basis']}입니다.")
     if irradiance:

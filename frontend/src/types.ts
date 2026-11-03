@@ -55,6 +55,8 @@ export type Economics = {
   payback_years: number | null;
   effective_price_per_kwh: number;
   required_price_per_kwh: number | null;
+  /** Optional debt (PF) view; null when the design has no loan. */
+  financing?: Financing | null;
   cashflows: {
     year: number;
     generation_kwh: number;
@@ -67,6 +69,29 @@ export type Economics = {
     discounted_net: number;
     cumulative: number;
   }[];
+};
+export type Financing = {
+  loan_pct: number;
+  loan_rate_pct: number;
+  loan_years: number;
+  grace_years: number;
+  loan_amount: number;
+  equity: number;
+  annual_debt_service: number;
+  total_interest: number;
+  equity_irr_pct: number | null;
+  equity_payback_years: number | null;
+  min_dscr: number | null;
+  schedule: {
+    year: number;
+    interest: number;
+    principal: number;
+    debt_service: number;
+    balance: number;
+    equity_cf: number;
+    dscr: number | null;
+  }[];
+  basis: string;
 };
 export type ModelMetrics = {
   months: number;

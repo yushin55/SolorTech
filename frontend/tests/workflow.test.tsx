@@ -470,6 +470,12 @@ it("keeps saved analysis metrics together and warns when the draft changes", asy
   });
   await user.click(stepButton(/재무성 분석/));
   await screen.findByText(/현재 조건이 분석 시점과 다릅니다/);
+  // The overview keeps site/design context and flags that results are out of date;
+  // the sticky step bar offers the re-run right where the user is.
+  const overview = document.querySelector(".overview")!;
+  expect(overview.textContent).toContain("검토 개요");
+  expect(overview.textContent).toContain("조건 변경됨");
+  expect(within(document.querySelector(".wizard-nav") as HTMLElement).getByRole("button", { name: "다시 분석" })).toBeTruthy();
   const cards = document.querySelectorAll(".stat");
   expect(cards[0].textContent).toContain("660.0");
   expect(cards[3].textContent).toContain("115.4");

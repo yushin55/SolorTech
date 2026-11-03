@@ -55,6 +55,64 @@ def sale_price(finance):
     raise ValueError("sale_mode: fixed 또는 smp_rec이어야 합니다.")
 
 
+def calculate_financing(flows, capex, finance):
+    """Optional debt view (PF 융자) on top of the unlevered project cash flows.
+
+    The loan covers ``loan_pct`` of CAPEX; interest-only during the grace years,
+    then level annual payments (원리금균등) over ``loan_years``. A balance still
+    outstanding in the last project year is repaid then (warned). Returns None
+    without a loan, so B/C·NPV·IRR above stay unlevered as in the guideline.
+    """
+    share = number(finance, "loan_pct", default=0, minimum=0, maximum=100) / 100
+    if share <= 0 or capex <= 0 or len(flows) < 2:
+        return None
+    rate = number(finance, "loan_rate_pct", default=4.5, minimum=0, maximum=50) / 100
+    term = integer(finance, "loan_years", default=10, minimum=1, maximum=50)
+    grace = integer(finance, "grace_years", default=0, minimum=0, maximum=20)
+    loan = capex * share
+    equity = capex - loan
+    payment = loan / term if rate == 0 else loan * rate / (1 - (1 + rate) ** -term)
+    balance = loan
+    cumulative = -equity
+    payback = 0. if equity == 0 else None
+    schedule = [{"year": 0, "interest": 0., "principal": 0., "debt_service": 0., "balance": loan,
+                 "equity_cf": -equity, "dscr": None}]
+    warnings = []
+    last_year = flows[-1]["year"]
+    for row in flows[1:]:
+        year = row["year"]
+        interest = balance * rate
+        principal = 0. if year <= grace else min(balance, max(payment - interest, 0.))
+        if year == grace + term or (year == last_year and balance - principal > 1e-6):
+            if year == last_year and year < grace + term:
+                warnings.append(f"융자 상환이 사업기간({last_year}년) 안에 끝나지 않아 마지막 해에 잔액 "
+                                f"{(balance - principal) / 1e8:,.1f}억 원을 일시 상환했습니다.")
+            principal = balance
+        service = interest + principal
+        balance -= principal
+        equity_cf = row["net"] - service
+        previous = cumulative
+        cumulative += equity_cf
+        if payback is None and previous < 0 <= cumulative and equity_cf > 0:
+            payback = (year - 1) + (-previous / equity_cf)
+        schedule.append({"year": year, "interest": interest, "principal": principal, "debt_service": service,
+                         "balance": balance, "equity_cf": equity_cf,
+                         "dscr": row["net"] / service if service > 0 else None})
+    serviced = [row["dscr"] for row in schedule if row["dscr"] is not None]
+    min_dscr = min(serviced) if serviced else None
+    if min_dscr is not None and min_dscr < 1:
+        warnings.append(f"최소 DSCR {min_dscr:.2f}로 1 미만인 해가 있어 원리금을 사업 현금흐름으로 갚지 못합니다.")
+    equity_irr = _irr([row["equity_cf"] for row in schedule]) if equity > 0 else None
+    return {
+        "loan_pct": share * 100, "loan_rate_pct": rate * 100, "loan_years": term, "grace_years": grace,
+        "loan_amount": loan, "equity": equity, "annual_debt_service": payment,
+        "total_interest": sum(row["interest"] for row in schedule),
+        "equity_irr_pct": equity_irr, "equity_payback_years": payback, "min_dscr": min_dscr,
+        "schedule": schedule, "warnings": warnings,
+        "basis": "세전 · 원리금균등 상환(거치기간 이자만) · 자기자본 현금흐름 = 사업 순현금흐름 − 원리금",
+    }
+
+
 def calculate_finance(annual_kwh, capex, costs, finance, purpose="sale"):
     """Cash flows, PVs, NPV, IRR, B/C, payback and the B/C = 1 required price.
 
@@ -112,7 +170,11 @@ def calculate_finance(annual_kwh, capex, costs, finance, purpose="sale"):
         warnings.append("할인 비용 합계가 0이어서 B/C를 계산할 수 없습니다.")
     # Price that makes discounted revenue equal discounted cost over all delivered kWh.
     required = discounted_costs / discounted_energy if discounted_energy > 0 else None
+    financing = calculate_financing(flows, capex, finance)
+    if financing:
+        warnings += financing["warnings"]
     return {
+        "financing": financing,
         "capex": capex, "annual_opex": opex,
         "first_year_sales_kwh": flows[1]["sales_kwh"] if years else 0.,
         "first_year_self_use_kwh": flows[1]["self_use_kwh"] if years else 0.,

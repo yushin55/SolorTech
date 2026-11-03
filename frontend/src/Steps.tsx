@@ -17,7 +17,7 @@ import {
   YAxis,
 } from "recharts";
 import { num } from "./api";
-import type { Result, Run } from "./types";
+import type { Candidate, Catalog, Design, Financing, Result, Run } from "./types";
 
 // Validated categorical order (dataviz validator: all checks pass on white).
 export const series = ["#2563eb", "#0d9488", "#d97706"];
@@ -132,6 +132,106 @@ export function Stepper({
         );
       })}
     </ol>
+  );
+}
+
+/**
+ * Site + design summary that stays above every wizard step, so the reviewer
+ * keeps the 후보지·설비 context while editing costs or finance. Values come
+ * from the latest analysis when it matches the inputs, otherwise from inputs.
+ */
+export function ReviewOverview({
+  candidate,
+  design,
+  catalog,
+  result,
+  status,
+}: {
+  candidate: Candidate | null;
+  design: Design | null;
+  catalog: Catalog | null;
+  /** Completed result for the current inputs (null when absent or stale). */
+  result: Result | null;
+  status: "none" | "pending" | "stale" | "done";
+}) {
+  const eq = design?.equipment;
+  const module = catalog?.modules.find((m) => m.id === eq?.module_preset);
+  const inverter = catalog?.inverters?.find((i) => i.id === eq?.inverter_model);
+  const steps = result?.steps;
+  const power = Number(eq?.module_preset === "custom" ? eq?.module_power_w : (module?.module_power_w ?? eq?.module_power_w));
+  const inputKw = eq?.capacity_mode !== "area" && eq ? (Number(eq.module_count) * power) / 1000 : null;
+  const area = steps?.equipment.area_m2;
+  const rows: [string, ReactNode, string?][] = [
+    [
+      "후보지",
+      candidate?.name ?? "—",
+      steps ? `${steps.site.province} ${steps.site.nearest_city} · ${SITE_TYPE[steps.site.site_type] ?? ""}` : candidate ? SITE_TYPE[candidate.site_type] : undefined,
+    ],
+    [
+      "수면 면적",
+      area != null ? `${num(area / 10000, 1)} ha` : candidate && !candidate.geometry ? "경계 없음" : "—",
+      steps?.equipment.usable_area_m2 != null ? `이용 가능 ${num(steps.equipment.usable_area_m2 / 10000, 1)} ha` : undefined,
+    ],
+    [
+      "설계 대안",
+      design?.name ?? "—",
+      eq ? (eq.structure_type === "seasonal" ? "가변형 · 계절별 경사" : steps ? `고정형 · ${steps.site.tilt}°` : "고정형") : undefined,
+    ],
+    [
+      "설비용량",
+      result ? `${num(result.capacity_dc_kw, 1)} kW` : inputKw ? `${num(inputKw, 1)} kW` : "—",
+      result ? `AC ${num(result.capacity_ac_kw)} kW` : inputKw ? "입력값 · 분석 전" : undefined,
+    ],
+    [
+      "모듈",
+      steps ? `${num(steps.equipment.module_count)}장` : eq?.capacity_mode !== "area" && eq ? `${num(Number(eq.module_count))}장` : "—",
+      module?.label ?? (eq?.module_model ? String(eq.module_model) : undefined),
+    ],
+    [
+      "인버터",
+      steps
+        ? steps.equipment.inverter.units.map((u) => `${u.kw} kW×${u.count}`).join(" + ")
+        : inverter
+          ? `${inverter.manufacturer} ${inverter.model}`
+          : "가이드라인 원칙",
+      steps ? `${steps.equipment.strings.series}직렬 × ${num(steps.equipment.strings.parallel)}병렬` : undefined,
+    ],
+    [
+      "계통연계",
+      steps?.equipment.grid.voltage ?? "—",
+      candidate?.cable_distance_m != null
+        ? `연계거리 ${num(candidate.cable_distance_m)} m`
+        : candidate?.grid_point && result
+          ? `연결점까지 직선 ${num(result.cable_distance_m)} m`
+          : "연결점 미입력",
+    ],
+    [
+      "연간 발전량",
+      result ? `${num(result.annual_kwh / 1000, 0)} MWh` : "—",
+      result ? `B/C ${num(result.economics.bc, 2)} · 필요단가 ${num(result.economics.required_price_per_kwh, 0)}원` : undefined,
+    ],
+  ];
+  const label = { none: "분석 결과 없음", pending: "분석 계산 중", stale: "조건 변경됨", done: "최신 결과 반영" }[status];
+  return (
+    <details className="card overview" open>
+      <summary>
+        <h3>검토 개요</h3>
+        <span className={`status ${status === "done" ? "done" : status === "pending" ? "pending" : status === "stale" ? "stale" : ""}`}>
+          {label}
+        </span>
+      </summary>
+      <dl>
+        {rows.map(([k, v, note]) => (
+          <div key={k}>
+            <dt>{k}</dt>
+            <dd>
+              {v}
+              {note && <small>{note}</small>}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </details>
   );
 }
 
@@ -688,7 +788,7 @@ function guidelineSteps(result: Result) {
           </div>
           <div>
             <span>
-              <Term name="필요 판매단가" /> (B/C = 1)
+              <Term name="필요 판매단가" /> (B/C = 1 · LCOE)
             </span>
             <strong>
               {num(e.required_price_per_kwh, 1)}
@@ -697,6 +797,12 @@ function guidelineSteps(result: Result) {
             <small>현재 단가 {num(e.effective_price_per_kwh, 1)} 원/kWh</small>
           </div>
         </div>
+        {e.financing && (
+          <FinancingView
+            financing={e.financing}
+            replacementYears={e.cashflows.filter((c) => c.replacement > 0).map((c) => c.year)}
+          />
+        )}
         <h4>발전량이 예상보다 낮을 때</h4>
         <div className="table-scroll">
           <table>
@@ -781,6 +887,17 @@ function guidelineSteps(result: Result) {
               {num(substitution.co2_t, 1)}
               <small>tCO₂</small>
             </strong>
+            {result.annual_kwh > 0 && (
+              <small>
+                {e.cashflows.length - 1}년 누적{" "}
+                {num(
+                  (substitution.co2_t * e.cashflows.reduce((s, c) => s + c.generation_kwh, 0)) /
+                    result.annual_kwh,
+                  0,
+                )}{" "}
+                tCO₂ (열화 반영)
+              </small>
+            )}
           </div>
         </div>
         <p className="hint">{substitution.basis}</p>
@@ -788,6 +905,97 @@ function guidelineSteps(result: Result) {
       </>
     ).props.children,
   ) as ReactElement<StepProps>[];
+}
+/** Equity-side view when the design assumes a loan (PF 융자). */
+function FinancingView({ financing: f, replacementYears }: { financing: Financing; replacementYears: number[] }) {
+  const debtYears = f.schedule.filter((r) => r.debt_service > 0);
+  const shortYears = debtYears.filter((r) => r.dscr != null && r.dscr < 1).map((r) => r.year);
+  const onlyReplacement = shortYears.length > 0 && shortYears.every((y) => replacementYears.includes(y));
+  return (
+    <div className="financing">
+      <h4>
+        자금 조달 시 자기자본 수익성 <span className="tag assumed">사용자 가정</span>
+      </h4>
+      <div className="metrics">
+        <div>
+          <span>자기자본 / 융자</span>
+          <strong>
+            {won(f.equity)}
+            <small> / {won(f.loan_amount)} 억 원</small>
+          </strong>
+          <small>
+            융자 {num(f.loan_pct, 0)}% · 연 {num(f.loan_rate_pct, 1)}% · 거치 {f.grace_years}년 + 상환 {f.loan_years}년
+          </small>
+        </div>
+        <div>
+          <span>자기자본 IRR · 회수기간</span>
+          <strong>
+            {num(f.equity_irr_pct, 2)}
+            <small>% · {f.equity_payback_years == null ? "회수 안 됨" : `${num(f.equity_payback_years, 1)}년`}</small>
+          </strong>
+        </div>
+        <div>
+          <span>연간 원리금 상환</span>
+          <strong>
+            {num(f.annual_debt_service / 10000)}
+            <small>만 원</small>
+          </strong>
+          <small>총 이자 {won(f.total_interest)}억 원</small>
+        </div>
+        <div>
+          <span>
+            최소 <abbr title="원리금상환비율 = 그해 사업 순현금흐름 ÷ 원리금. 1 미만이면 그해 원리금을 사업 수입으로 갚지 못합니다.">DSCR</abbr>
+          </span>
+          <strong className={f.min_dscr != null && f.min_dscr < 1 ? "load-fail" : undefined}>
+            {num(f.min_dscr, 2)}
+          </strong>
+          <small>
+            {f.min_dscr == null
+              ? "—"
+              : f.min_dscr >= 1
+                ? "모든 상환 연도 1 이상"
+                : onlyReplacement
+                  ? `${shortYears.join("·")}년차 인버터 교체 때문 · 교체 적립금 검토`
+                  : `${shortYears.join("·")}년차 1 미만`}
+          </small>
+        </div>
+      </div>
+      {debtYears.length > 0 && (
+        <details className="schedule">
+          <summary>연도별 상환 일정 ({debtYears.length}년)</summary>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>연차</th>
+                  <th>이자 (만 원)</th>
+                  <th>원금 (만 원)</th>
+                  <th>잔액 (억 원)</th>
+                  <th>DSCR</th>
+                  <th>자기자본 현금흐름 (만 원)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {debtYears.map((r) => (
+                  <tr key={r.year}>
+                    <th>{r.year}년차</th>
+                    <td>{num(r.interest / 10000)}</td>
+                    <td>{num(r.principal / 10000)}</td>
+                    <td>{won(r.balance)}</td>
+                    <td>{num(r.dscr, 2)}</td>
+                    <td>{num(r.equity_cf / 10000)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
+      <p className="hint">
+        {f.basis}. 위 B/C·NPV·IRR은 가이드라인대로 융자를 뺀 사업 전체 기준이고, 이 표는 자기자본 투자자 관점입니다.
+      </p>
+    </div>
+  );
 }
 function verdict(bc: number | null) {
   if (bc == null) return "산정 불가";

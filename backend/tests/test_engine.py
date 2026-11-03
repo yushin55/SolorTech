@@ -213,6 +213,31 @@ def test_rec_curtailment_replacement_and_self_consumption():
     assert own["first_year_revenue"] == 60 * 150 + 40 * 100
 
 
+def test_financing_is_optional_and_amortizes_the_loan():
+    base = {"years": 5, "discount_pct": 5, "degradation_pct": 0, "sale_mode": "fixed", "fixed_price": 100}
+    unlevered = calculate_finance(100, 10000, {"annual_om": 0}, base)
+    assert unlevered["financing"] is None
+    levered = calculate_finance(100, 10000, {"annual_om": 0},
+                                {**base, "loan_pct": 80, "loan_rate_pct": 5, "loan_years": 3, "grace_years": 1})
+    loan = levered["financing"]
+    # B/C·NPV stay unlevered (guideline basis); only the equity view changes.
+    assert levered["bc"] == pytest.approx(unlevered["bc"])
+    assert loan["loan_amount"] == 8000 and loan["equity"] == 2000
+    payment = 8000 * .05 / (1 - 1.05 ** -3)
+    assert loan["annual_debt_service"] == pytest.approx(payment)
+    rows = loan["schedule"]
+    assert rows[1]["principal"] == 0 and rows[1]["interest"] == pytest.approx(400)  # grace year: interest only
+    assert [r["debt_service"] for r in rows[2:5]] == pytest.approx([payment] * 3)
+    assert rows[4]["balance"] == pytest.approx(0, abs=1e-6) and rows[5]["debt_service"] == 0
+    assert loan["min_dscr"] == pytest.approx(10000 / payment)
+    assert loan["equity_irr_pct"] == pytest.approx(_irr([r["equity_cf"] for r in rows]))
+    assert not loan["warnings"]
+    short = calculate_finance(100, 10000, {"annual_om": 0},
+                              {**base, "loan_pct": 50, "loan_rate_pct": 0, "loan_years": 10})
+    assert short["financing"]["schedule"][-1]["balance"] == 0
+    assert any("일시 상환" in w for w in short["warnings"])
+
+
 def test_irr_none_for_no_root_and_multiple_roots():
     assert _irr([-100, -10, -10]) is None
     assert _irr([-100, 230, -132]) is None  # Distinct valid rates 10% and 20%.

@@ -51,7 +51,15 @@ import {
 import type { Grade } from "./mapData";
 import Validation from "./Validation";
 import { ModelValidation, PlantRecords, WeatherValidation } from "./Records";
-import { GLOSSARY, ReferenceBacktest, StepResult, Stepper, Verdict, WIZARD_STEPS } from "./Steps";
+import {
+  GLOSSARY,
+  ReferenceBacktest,
+  ReviewOverview,
+  StepResult,
+  Stepper,
+  Verdict,
+  WIZARD_STEPS,
+} from "./Steps";
 import ReportBody from "./Report";
 
 type Page = "review" | "data" | "weather" | "model" | "compare" | "validation" | "report";
@@ -777,6 +785,35 @@ export default function App() {
       )[0]
     : null;
   const showRun = page === "report";
+  const runStatus = currentPending
+    ? "pending"
+    : !result
+      ? "none"
+      : stale
+        ? "stale"
+        : "done";
+  /** One-line "what to do next" shown in the sticky step bar. */
+  const nextHint = currentPending
+    ? "발전량·사업성을 계산하고 있습니다. 끝나면 결과가 자동으로 표시됩니다."
+    : stale && step >= 2
+      ? "조건이 분석 시점과 다릅니다. ‘다시 분석’으로 결과에 반영하세요."
+      : step === 0
+        ? !candidate
+          ? "지도에서 지역을 검색하고 ‘이 지역 수면 찾기’로 후보지를 추가하세요."
+          : "경계·제외 구역·연결점을 확인한 뒤 다음 단계로 넘어가세요."
+        : step === 1
+          ? dirty
+            ? "다음 단계로 넘어가면 입력한 조건이 저장됩니다."
+            : "구조물·모듈·인버터를 정하고 다음 단계에서 분석을 실행하세요."
+          : step === 2
+            ? activeRun?.result
+              ? "발전량을 확인했으면 개략공사비 단계로 넘어가세요."
+              : "‘분석 실행’을 누르면 ③~⑥단계가 한 번에 계산되고 다음으로 넘어갈 수 있습니다."
+            : step === 3
+              ? "주황색 ‘견적 가정’ 단가를 실제 견적으로 바꾸면 결과가 정확해집니다."
+              : step === 4
+                ? "판매 단가 방식을 정하고 1년차 수익을 확인하세요."
+                : "결론을 확인하고 검토 보고서로 인쇄·PDF 저장하세요.";
   const mappable = workspace?.candidates.filter(hasGeometry) || [];
   return (
     <div className="app">
@@ -951,6 +988,13 @@ export default function App() {
                   <h2>{WIZARD_STEPS[step].title}</h2>
                   <p>{WIZARD_STEPS[step].description}</p>
                 </div>
+                <ReviewOverview
+                  candidate={candidate}
+                  design={draft ?? design}
+                  catalog={catalog}
+                  result={stale ? null : result}
+                  status={runStatus}
+                />
                 {activeRun?.status === "failed" && (
                   <div className="banner error">
                     <span>분석 실패: {activeRun.error}</span>
@@ -1256,6 +1300,17 @@ export default function App() {
                   <button className="btn outline" disabled={step === 0} onClick={() => void goTo(step - 1)}>
                     이전
                   </button>
+                  <p className="wizard-hint" role="status">
+                    <span className="wizard-hint-step">
+                      {step + 1}/{WIZARD_STEPS.length}
+                    </span>
+                    {nextHint}
+                  </p>
+                  {stale && step >= 2 && !currentPending && (
+                    <button className="btn" disabled={running} onClick={() => void analyze()}>
+                      다시 분석
+                    </button>
+                  )}
                   {step < WIZARD_STEPS.length - 1 ? (
                     <button
                       className="btn primary"
@@ -1270,9 +1325,6 @@ export default function App() {
                     </button>
                   )}
                 </div>
-                {step === 2 && !activeRun?.result && (
-                  <p className="hint wizard-note">분석을 실행하면 다음 단계로 넘어갈 수 있습니다.</p>
-                )}
               </div>
             )}
             {page === "data" && <PlantRecords onError={handleError} />}

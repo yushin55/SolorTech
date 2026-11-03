@@ -2575,18 +2575,119 @@ details.step:not([open]) .step-summary {
 .step-detail {
   min-height: 160px;
 }
+/* Sticky step bar: previous · what to do next · next, always in reach on long steps. */
 .wizard-nav {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
   display: flex;
-  justify-content: center;
+  align-items: center;
   gap: 12px;
   margin-top: 8px;
-  padding-top: 24px;
-  border-top: 1px solid var(--line);
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: var(--surface);
+  box-shadow: 0 -6px 18px rgb(17 24 39 / 0.06);
 }
 .wizard-nav .btn {
-  min-width: 180px;
-  min-height: 50px;
+  min-width: 140px;
+  min-height: 46px;
   font-size: 16px;
+}
+.wizard-hint {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-2);
+  font-size: 14px;
+}
+.wizard-hint-step {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--primary-weak);
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+/* ---------- Review overview (site + design context on every step) ---------- */
+.overview {
+  padding: 14px 20px 16px;
+}
+.overview summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+.overview summary::-webkit-details-marker {
+  display: none;
+}
+.overview summary::after {
+  content: "▾";
+  margin-left: auto;
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+.overview:not([open]) summary::after {
+  transform: rotate(-90deg);
+}
+.overview h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.overview dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px 18px;
+  margin: 12px 0 0;
+}
+.overview dl div {
+  min-width: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--subtle);
+}
+.overview dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+.overview dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-weight: 700;
+}
+.overview dd small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+.status.stale {
+  background: var(--warn-weak);
+  color: var(--warn);
+}
+/* ---------- Optional financing (PF) block in step ⑥ ---------- */
+.financing {
+  margin-top: 8px;
+}
+.financing h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.financing .schedule {
+  margin-top: 10px;
+}
+.financing .schedule summary {
+  color: var(--primary);
+  font-weight: 600;
+  cursor: pointer;
 }
 .btn.outline {
   border-color: var(--primary);
@@ -2595,11 +2696,27 @@ details.step:not([open]) .step-summary {
 .btn.outline:hover:not(:disabled) {
   background: var(--primary-weak);
 }
-.wizard-note {
-  margin-top: -8px;
-  text-align: center;
+@media (max-width: 1100px) {
+  .overview dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 @media (max-width: 760px) {
+  .wizard-nav {
+    flex-wrap: wrap;
+    padding: 10px 12px;
+  }
+  .wizard-hint {
+    order: -1;
+    flex-basis: 100%;
+  }
+  .wizard-nav .btn {
+    flex: 1;
+    min-width: 0;
+  }
+  .overview dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
   .stepper {
     padding: 14px 0 10px;
   }

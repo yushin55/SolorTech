@@ -232,6 +232,10 @@ const finance: FieldDef[] = [
   { key: "discount_pct", label: "할인율", unit: "%", step: 0.1 },
   { key: "degradation_pct", label: "연간 열화율", unit: "%", step: 0.1 },
   { key: "stress_pcts", label: "발전량 감소 점검", unit: "%, 쉼표 구분", text: true },
+  { key: "loan_pct", label: "융자 비율 (0 = 전액 자기자본)", unit: "%", step: 1, source: "자금 조달", required: false },
+  { key: "loan_rate_pct", label: "융자 이자율", unit: "%/년", step: 0.1, show: (v) => Number(v.loan_pct) > 0, source: "자금 조달" },
+  { key: "loan_years", label: "상환 기간 (거치 후)", unit: "년", show: (v) => Number(v.loan_pct) > 0, source: "자금 조달" },
+  { key: "grace_years", label: "거치 기간 (이자만 납부)", unit: "년", show: (v) => Number(v.loan_pct) > 0, source: "자금 조달" },
 ];
 export function Fields({
   fields,
@@ -453,7 +457,7 @@ const sections: Record<
     title: "재무 조건 (⑥)",
     fields: finance,
     key: "finance",
-    hint: "B/C = 유입 현재가치 ÷ 유출 현재가치. 필요 판매단가는 B/C = 1이 되는 단가로, 입찰가가 아닌 후보지 비교 참고값입니다.",
+    hint: "B/C = 유입 현재가치 ÷ 유출 현재가치. 필요 판매단가는 B/C = 1이 되는 단가(= 균등화발전원가 LCOE)로, 입찰가가 아닌 후보지 비교 참고값입니다. 융자 조건은 선택 입력이며 자기자본 수익률·원리금 상환 능력(DSCR)만 따로 보여 주고, B/C·NPV는 가이드라인대로 비차입 기준을 유지합니다.",
   },
 };
 /** Design inputs for the given guideline steps of the review wizard. */
@@ -501,6 +505,11 @@ export function DesignEditor({
           const values: Settings =
             group.key === "finance"
               ? {
+                  // Designs saved before 자금 조달 existed show the server defaults.
+                  loan_pct: 0,
+                  loan_rate_pct: 4.5,
+                  loan_years: 10,
+                  grace_years: 0,
                   ...(design.finance as Settings),
                   stress_pcts: stressText(design.finance.stress_pcts),
                   purpose: eq.purpose,
