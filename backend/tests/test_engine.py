@@ -135,6 +135,26 @@ def test_inverter_selection_reproduces_table_3_12(dc_kw, units):
     assert {unit["kw"]: unit["count"] for unit in result["units"]} == units
 
 
+def test_catalog_inverter_covers_dc_capacity():
+    result = guideline.inverter_design(250, "auto", "qvolt_p110ta", parallel=30)
+    assert result["units"][0]["count"] == 3 and result["ac_capacity_kw"] == 330
+    assert result["cost"] == 3 * 110 * 150000 and result["junction_box_count"] == 0
+    assert result["warnings"] == []
+    assert guideline.inverter_design(50, "multi", "qvolt_p60ta")["unit_count"] == 2
+    assert guideline.inverter_design(250, "auto", "qvolt_p60ta", parallel=80)["warnings"]
+
+
+def test_catalog_module_and_inverter_resolve():
+    resolved, _ = guideline.resolve_equipment(
+        {"module_preset": "hd_his_t650uj", "inverter_model": "hd_h150", "tilt_mode": "manual", "tilt": 30},
+        {"optimal_tilt": 30, "seasonal_tilts": {}})
+    assert resolved["module_power_w"] == 650 and resolved["module_height_m"] == 2.465
+    assert resolved["module_price"] == 325000 and "HiS-T650UJ" in resolved["module_model"]
+    assert resolved["inverter_efficiency"] == pytest.approx(.983)
+    assert (resolved["vmp_v"], resolved["voc_v"], resolved["gamma_pdc"]) == (47.75, 57.69, -.0029)
+    assert "데이터시트" in guideline.string_design(2400, resolved)["electrical_source"]
+
+
 def test_array_pitch_reproduces_table_3_23():
     assert guideline.array_pitch(2.275, 1, 30)["pitch_m"] == pytest.approx(4.65, abs=.01)
     assert guideline.array_pitch(2.275, 1, 28)["pitch_m"] == pytest.approx(4.53, abs=.01)
@@ -265,3 +285,47 @@ def test_six_step_review_on_real_weather(candidate, cached_year):
     assert result["stress"][-1]["bc"] < economics["bc"]
     assert result["layout"]["module_count"] == 240
     assert result["cable_distance_m"] == 20
+
+
+def test_review_with_catalog_equipment(candidate, cached_year):
+    from app.schemas import Costs, Equipment, Finance
+
+    equipment = {**Equipment().model_dump(), "module_count": 238, "module_preset": "hd_his_t650uj",
+                 "inverter_model": "qvolt_p110ta"}
+    design = {"equipment": equipment, "costs": Costs().model_dump(), "finance": Finance().model_dump()}
+    result = run_analysis({"candidate": candidate, "design": design, "weather": {"years": cached_year}})
+    steps = result["steps"]["equipment"]
+    assert steps["strings"]["series"] == 14  # datasheet Vmp/Voc, not the 480 Wp example
+    assert result["capacity_dc_kw"] == pytest.approx(238 * .65)
+    assert steps["inverter"]["units"][0]["model"] == "Q.VOLT P110TA" and steps["inverter"]["unit_count"] == 2
+    assert steps["module_catalog"]["efficiency_pct"] == 23.3
+    module_cost = next(item for item in result["steps"]["costs"]["items"] if item["key"] == "module")
+    assert module_cost["amount"] == 238 * 325000 and "견적 가정" in module_cost["source"]
+    loads = steps["module_loads"]
+    assert loads["total_weight_kg"] == 238 * 35 and loads["weight_per_m2"] == pytest.approx(35 / (1.134 * 2.465))
+    assert loads["wind_pressure_pa"] == pytest.approx(.5 * 1.225 * 40 ** 2) and loads["wind_ok"] and loads["snow_ok"]
+    comparison = {item["id"]: item for item in steps["module_comparison"]["items"]}
+    assert comparison["hd_his_t650uj"]["selected"] and comparison["hd_his_t650uj"]["max_modules"] > 0
+    assert comparison["hd_his_t650uj"]["kw_per_1000m2"] > comparison["floating_450"]["kw_per_1000m2"]
+
+
+def test_snow_load_beyond_module_rating_is_flagged():
+    from app.engine.analysis import _module_loads
+
+    loads = _module_loads({"module_preset": "hd_his_t650uj", "module_count": 10},
+                          {"wind_speed_ms": 45, "snow_load_kn_m2": 7.0})
+    assert loads["wind_ok"] and not loads["snow_ok"]
+    assert _module_loads({"module_preset": "floating_450", "module_count": 10}, {}) is None
+
+
+def test_quoted_prices_replace_converted_prices():
+    from app.engine.analysis import _apply_quotes
+
+    inverter = guideline.inverter_design(250, "auto", "qvolt_p110ta")
+    equipment = {"module_preset": "hd_his_t650uj", "module_price": 325000}
+    _apply_quotes(equipment, {"module_unit_price": 210000, "inverter_unit_price": 9000000}, inverter)
+    assert equipment["module_price"] == 210000 and equipment["module_price_source"] == "사용자 견적"
+    assert inverter["cost"] == 3 * 9000000 and inverter["price_source"] == "사용자 견적"
+    untouched = guideline.inverter_design(250)
+    _apply_quotes({"module_preset": "floating_450"}, {"inverter_unit_price": 9000000}, untouched)
+    assert untouched["price_source"] == "가이드라인 표 3-12" and untouched["cost"] == 45e6

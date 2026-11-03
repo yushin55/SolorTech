@@ -79,7 +79,7 @@ class Equipment(StrictModel):
     tilt_mode: Literal["guideline", "manual"] = "guideline"
     tilt: float = Field(default=30, ge=0, le=90)
     azimuth: float = Field(default=180, ge=90, le=270)
-    module_preset: Literal["floating_450", "land_480", "custom"] = "floating_450"
+    module_preset: Literal["floating_450", "land_480", "hd_his_t650uj", "custom"] = "floating_450"
     module_model: Name = "수상용 단결정 450 Wp (가이드라인 표 3-9)"
     module_power_w: float = Field(default=450, ge=1, le=2000)
     module_width_m: float = Field(default=1.030, ge=.05, le=10)
@@ -95,6 +95,8 @@ class Equipment(StrictModel):
     spacing_mode: Literal["guideline", "manual"] = "guideline"
     row_spacing_m: float = Field(default=1.2, ge=0, le=100)
     inverter_configuration: Literal["auto", "multi", "single"] = "auto"
+    inverter_model: Literal["guideline", "qvolt_p60ta", "qvolt_p110ta", "qvolt_p125tx",
+                            "hd_h125", "hd_h150", "hd_h350"] = "guideline"
     purpose: Literal["sale", "self"] = "sale"
     gamma_pdc: float = Field(default=-0.0035, ge=-0.02, le=0)
     inverter_efficiency: float = Field(default=0.96, ge=.5, le=1)
@@ -114,6 +116,8 @@ class Costs(StrictModel):
     design_permitting: NonNegative = 50000000
     grid_connection: NonNegative = 60000000
     annual_om_per_kw: NonNegative = 27000
+    module_unit_price: NonNegative = 0      # 견적 단가, 0 = 가이드라인/카탈로그 환산 단가
+    inverter_unit_price: NonNegative = 0    # 카탈로그 인버터 견적 단가 (원/대), 0 = 환산 단가
     replacement_year: int = Field(default=12, ge=1, le=50)
 
 

@@ -9,7 +9,7 @@ validated on K-water operating records.
 import math
 
 from .. import calibration, kma, weather
-from . import guideline
+from . import catalog, guideline
 from .common import ENGINE_VERSION, integer, number
 from .energy import long_term_energy
 from .finance import calculate_finance
@@ -29,6 +29,50 @@ def _layout(candidate, equipment, pitch):
     return probe, maximum
 
 
+AIR_DENSITY = 1.225  # kg/m³, 표준대기
+
+
+def _module_loads(equipment, factors):
+    """Catalog module: weight on the floats and a simple check of its rated load against 표 3-4."""
+    spec = catalog.MODULES.get(equipment.get("module_preset"))
+    if not spec:
+        return None
+    area = spec["module_width_m"] * spec["module_height_m"]
+    wind = .5 * AIR_DENSITY * factors["wind_speed_ms"] ** 2
+    snow = factors["snow_load_kn_m2"] * 1000
+    # Wind acts as pressure or suction, so the weaker side governs.
+    wind_rating = min(spec["load_front_pa"], spec["load_rear_pa"])
+    return {"weight_kg": spec["weight_kg"], "module_count": equipment["module_count"],
+            "total_weight_kg": spec["weight_kg"] * equipment["module_count"], "weight_per_m2": spec["weight_kg"] / area,
+            "wind_speed_ms": factors["wind_speed_ms"], "wind_pressure_pa": wind, "wind_rating_pa": wind_rating,
+            "wind_ok": wind <= wind_rating, "snow_load_pa": snow, "snow_rating_pa": spec["load_front_pa"],
+            "snow_ok": snow <= spec["load_front_pa"],
+            "rating_basis": spec["load_basis"],
+            "basis": "간이 검토: 표 3-4 최대풍속의 속도압 ½ρV²·지상적설하중을 모듈 허용하중(제조사)과 비교. "
+                     "가스트영향계수·풍력계수·경사 보정은 미반영이므로 구조계산서로 확인해야 합니다."}
+
+
+def _module_comparison(equipment, pitch, probe):
+    """Same rows, tilt and spacing rule with only the module swapped (표 3-9 presets vs catalog)."""
+    rows = integer(equipment, "array_rows", default=1, minimum=1, maximum=6)
+    spacing_tilt = max(equipment.get("seasonal_tilts", {}).values(), default=equipment["tilt"])
+    usable = probe["usable_area_m2"] if probe else None
+    items = []
+    for key, spec in {**guideline.MODULES, **catalog.MODULES}.items():
+        option = guideline.array_pitch(spec["module_height_m"], rows, spacing_tilt)
+        step = (option["pitch_m"] if equipment.get("spacing_mode", "guideline") == "guideline"
+                else option["plan_depth_m"] + pitch["gap_m"])
+        count = math.floor(usable / (step * spec["module_width_m"])) * rows if usable else None
+        items.append({"id": key, "label": spec["short_label"], "module_power_w": spec["module_power_w"],
+                      "pitch_m": step, "kw_per_1000m2": rows / (step * spec["module_width_m"]) * spec["module_power_w"],
+                      "max_modules": count, "max_kw": None if count is None else count * spec["module_power_w"] / 1000,
+                      "price_per_kw": spec["module_price"] / spec["module_power_w"] * 1000,
+                      "price_source": spec.get("price_basis", spec["source"]),
+                      "selected": key == equipment.get("module_preset")})
+    return {"items": items, "usable_area_m2": usable,
+            "basis": f"배열 {rows}단 · 이격 기준 경사 {spacing_tilt:g}° 동일, 모듈만 교체"}
+
+
 def _place(candidate, equipment, pitch, module_count):
     rows = integer(equipment, "array_rows", default=1, minimum=1, maximum=6)
     layout = calculate_layout(candidate, {
@@ -46,12 +90,32 @@ def _place(candidate, equipment, pitch, module_count):
     return layout
 
 
+def _apply_quotes(equipment, costs, inverter):
+    """Quoted unit prices from step ④ replace guideline / converted catalog prices."""
+    module_quote = number(costs, "module_unit_price", default=0, minimum=0)
+    if module_quote:
+        equipment["module_price"] = module_quote
+    equipment["module_price_source"] = (
+        "사용자 견적" if module_quote else
+        "카탈로그 · 표 3-9 W당 단가 환산 (견적 가정)" if equipment.get("module_preset") in catalog.MODULES else
+        "사용자 입력" if equipment.get("module_preset") == "custom" else "가이드라인 표 3-9")
+    inverter_quote = number(costs, "inverter_unit_price", default=0, minimum=0)
+    if inverter.get("model_id") and inverter_quote:
+        inverter["units"][0]["unit_cost"] = inverter_quote
+        inverter["cost"] = inverter_quote * inverter["unit_count"]
+    inverter["price_source"] = (
+        "사용자 견적" if inverter.get("model_id") and inverter_quote else
+        "카탈로그 · 표 3-12 kW당 단가 환산 (견적 가정)" if inverter.get("model_id") else "가이드라인 표 3-12")
+
+
 def _costs(equipment, costs, dc_kw, inverter, distance, floating):
     items = [
         ("module", "태양광 모듈", equipment["module_count"] * number(equipment, "module_price", minimum=0),
-         f"{equipment['module_count']:,}장 × {number(equipment, 'module_price', minimum=0):,.0f}원", "가이드라인 표 3-9"),
+         f"{equipment['module_count']:,}장 × {number(equipment, 'module_price', minimum=0):,.0f}원",
+         equipment["module_price_source"]),
         ("inverter", "인버터", inverter["cost"],
-         " + ".join(f"{unit['kw']} kW × {unit['count']}대" for unit in inverter["units"]), "가이드라인 표 3-12"),
+         " + ".join(f"{unit.get('model', '')} {unit['kw']} kW × {unit['count']}대".strip() for unit in inverter["units"]),
+         inverter["price_source"]),
     ]
     junction = number(costs, "junction_box_unit", default=0, minimum=0)
     if junction:
@@ -100,14 +164,23 @@ def run_analysis(snapshot):
     strings = guideline.string_design(requested, equipment)
     equipment["module_count"] = strings["modules_used"]
     dc_kw = equipment["module_count"] * equipment["module_power_w"] / 1000
-    inverter = guideline.inverter_design(dc_kw, equipment.get("inverter_configuration", "auto"))
+    inverter = guideline.inverter_design(dc_kw, equipment.get("inverter_configuration", "auto"),
+                                         equipment.get("inverter_model"), strings["parallel"])
     equipment["ac_capacity_kw"] = inverter["ac_capacity_kw"]
+    _apply_quotes(equipment, costs, inverter)
     purpose = equipment.get("purpose", "sale")
     grid = guideline.grid_connection(dc_kw, purpose)
     layout = _place(candidate, equipment, pitch, equipment["module_count"]) if probe else None
     if layout is None:
         warnings.append("후보지 경계가 없어 면적·배치 검토를 생략했습니다(기존 발전소 재현 검토).")
-    warnings += strings["warnings"]
+    warnings += strings["warnings"] + inverter.get("warnings", [])
+    loads = _module_loads(equipment, factors)
+    if loads and not loads["wind_ok"]:
+        warnings.append(f"최대풍속 {loads['wind_speed_ms']:g} m/s 속도압 {loads['wind_pressure_pa']:,.0f} Pa가 "
+                        f"모듈 허용하중 {loads['wind_rating_pa']:,} Pa를 넘습니다.")
+    if loads and not loads["snow_ok"]:
+        warnings.append(f"지상적설하중 {loads['snow_load_pa']:,.0f} Pa가 모듈 전면 허용하중 "
+                        f"{loads['snow_rating_pa']:,} Pa를 넘습니다. 다른 모듈 또는 구조 보강을 검토하세요.")
 
     # ③ 연간 발전량: 물리 모델 + 운영실적 보정
     years = snapshot.get("weather", {}).get("years") or weather.long_term_years()
@@ -176,6 +249,9 @@ def run_analysis(snapshot):
                 "module": {key: equipment[key] for key in ("module_model", "module_power_w", "module_width_m",
                                                             "module_height_m", "module_price")},
                 "module_preset": equipment.get("module_preset"),
+                "module_catalog": catalog.MODULES.get(equipment.get("module_preset")),
+                "inverter_catalog": catalog.INVERTERS.get(equipment.get("inverter_model")),
+                "module_loads": loads, "module_comparison": _module_comparison(equipment, pitch, probe),
                 "area_m2": probe["area_m2"] if probe else None,
                 "usable_area_m2": probe["usable_area_m2"] if probe else None,
                 "max_modules_by_area": maximum, "requested_modules": requested,

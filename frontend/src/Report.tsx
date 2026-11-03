@@ -37,7 +37,7 @@ export default function ReportBody({ run, appendix }: { run: Run; appendix: Reac
   ];
   const steps: [string, string][] = [
     ["① 설치대상지", `${site.province} ${site.nearest_city} · ${site.structure_type === "seasonal" ? "가변형" : `고정형 ${site.tilt}°`} · 정남향 · 설계풍속 ${site.wind_speed_ms} m/s`],
-    ["② 기자재", `${equipment.module.module_power_w} W × ${num(equipment.module_count)}장 = ${num(result.capacity_dc_kw, 0)} kW · 인버터 ${equipment.inverter.units.map((u) => `${u.kw} kW×${u.count}`).join(" + ")} · ${equipment.grid.voltage}`],
+    ["② 기자재", `${equipment.module.module_power_w} W × ${num(equipment.module_count)}장 = ${num(result.capacity_dc_kw, 0)} kW · 인버터 ${equipment.inverter.units.map((u) => `${u.model ? u.model + " " : ""}${u.kw} kW×${u.count}`).join(" + ")} · ${equipment.grid.voltage}`],
     ["③ 발전량", `연 ${num(result.annual_kwh / 1000, 0)} MWh · ${result.physics.years.length}년 기상(${result.physics.years[0]}~${result.physics.years.at(-1)}) · ${cal ? "운영실적 보정" : "물리 모델"}`],
     ["④ 공사비", `${eok(costs.total)} · 연 유지관리 ${num(costs.annual_om / 10000)}만 원`],
     ["⑤ 수익", `1년차 ${eok(revenue.first_year_revenue, 2)} (${num(revenue.price_per_kwh, 0)}원/kWh${revenue.purpose === "self" ? ", 소내소비 포함" : ""})`],
@@ -159,7 +159,7 @@ export default function ReportBody({ run, appendix }: { run: Run; appendix: Reac
 
       <details className="report-appendix">
         <summary>부록 · 상세 산정 근거 (6단계 전체, 연도별 현금흐름, 대안 비교, 가정 목록)</summary>
-        <ReviewSteps run={run} expandAll />
+        <ReviewSteps run={run} />
         {appendix}
         <h3>계산 가정 전체</h3>
         <p className="hint">

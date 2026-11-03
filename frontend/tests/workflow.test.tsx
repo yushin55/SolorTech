@@ -12,8 +12,8 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "../src/App";
-import { CandidateForm } from "../src/Editors";
-import type { Candidate, Design, Run } from "../src/types";
+import { CandidateForm, DesignEditor } from "../src/Editors";
+import type { Candidate, Catalog, Design, Run } from "../src/types";
 vi.mock("../src/MapView", () => ({
   default: () => <div data-testid="map">좌표 편집 지도</div>,
 }));
@@ -417,38 +417,70 @@ describe("candidate data integrity", () => {
     expect(value.exclusions[0].coordinates[0][0][0]).toBeCloseTo(127.1);
   });
 });
-it("keeps saved analysis metrics together and warns when the draft changes", async () => {
-  const user = userEvent.setup();
-  render(<App />);
+/** Walks ① 후보지 → ② 설계 → ③ and runs the analysis there. */
+async function runFirstAnalysis(user: ReturnType<typeof userEvent.setup>) {
   await screen.findByRole("combobox", { name: "후보지 선택" });
+  expect(screen.getByRole("heading", { name: "① 설치대상지 선정" })).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "다음", exact: true }));
+  await screen.findByRole("combobox", { name: "설계 대안 선택" });
+  await user.click(screen.getByRole("button", { name: "다음", exact: true }));
   await user.click(
     screen.getByRole("button", { name: "분석 실행", exact: true }),
   );
   await screen.findByText("분석 완료");
-  // The step board opens on ③ and switches to one step at a time.
+}
+const stepButton = (name: RegExp) =>
+  within(screen.getByRole("list", { name: "가이드라인 6단계" })).getByRole("button", { name });
+it("locks later guideline steps until the analysis has run", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await screen.findByRole("combobox", { name: "후보지 선택" });
+  expect((stepButton(/개략공사비/) as HTMLButtonElement).disabled).toBe(true);
+  await user.click(screen.getByRole("button", { name: "다음", exact: true }));
+  await user.click(screen.getByRole("button", { name: "다음", exact: true }));
   expect(screen.getByRole("heading", { name: "③ 설치용량 및 연간발전량" })).toBeTruthy();
-  await user.click(screen.getByRole("tab", { name: /재무성/ }));
-  expect(screen.getByRole("heading", { name: "⑥ 재무성 분석 및 에너지 대체효과" })).toBeTruthy();
+  expect((screen.getByRole("button", { name: "다음", exact: true }) as HTMLButtonElement).disabled).toBe(true);
+});
+it("saves edited conditions when moving to the next step", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await screen.findByRole("combobox", { name: "후보지 선택" });
+  await user.click(screen.getByRole("button", { name: "다음", exact: true }));
+  fireEvent.change(await screen.findByRole("spinbutton", { name: "모듈 수량" }), {
+    target: { value: "800" },
+  });
+  await user.click(screen.getByRole("button", { name: "다음", exact: true }));
+  await waitFor(() => expect(designs[0].equipment.module_count).toBe(800));
+  expect(screen.getByRole("heading", { name: "③ 설치용량 및 연간발전량" })).toBeTruthy();
+});
+it("keeps saved analysis metrics together and warns when the draft changes", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await runFirstAnalysis(user);
+  // The wizard shows one guideline step at a time, starting the results at ③.
+  expect(screen.getByRole("region", { name: "③ 설치용량 및 연간발전량 산정 결과" })).toBeTruthy();
+  for (const title of ["④ 개략공사비", "⑤ 예상수익", "⑥ 재무성 분석 및 에너지 대체효과"]) {
+    await user.click(screen.getByRole("button", { name: "다음", exact: true }));
+    expect(screen.getByRole("heading", { name: title })).toBeTruthy();
+  }
   expect(screen.queryByRole("heading", { name: "③ 설치용량 및 연간발전량" })).toBeNull();
-  await user.click(screen.getByRole("tab", { name: "설계 조건" }));
-  await user.click(screen.getByRole("tab", { name: "② 기자재" }));
+  await user.click(stepButton(/부지·기자재/));
   fireEvent.change(screen.getByRole("spinbutton", { name: "모듈 수량" }), {
     target: { value: "1000" },
   });
+  await user.click(stepButton(/재무성 분석/));
   await screen.findByText(/현재 조건이 분석 시점과 다릅니다/);
   const cards = document.querySelectorAll(".stat");
   expect(cards[0].textContent).toContain("660.0");
   expect(cards[3].textContent).toContain("115.4");
-  expect(screen.getByRole("button", { name: "조건 저장" })).toBeTruthy();
+  // Moving forward saved the edit; the result still reflects the old run.
+  expect(designs[0].equipment.module_count).toBe(1000);
+  expect(screen.getByRole("button", { name: "저장된 상태입니다" })).toBeTruthy();
 });
 it("resets validation run selection when switching to another project", async () => {
   const user = userEvent.setup();
   render(<App />);
-  await screen.findByRole("combobox", { name: "후보지 선택" });
-  await user.click(
-    screen.getByRole("button", { name: "분석 실행", exact: true }),
-  );
-  await screen.findByText("분석 완료");
+  await runFirstAnalysis(user);
   await user.click(
     screen.getByRole("button", { name: "실적 CSV 대조", exact: true }),
   );
@@ -468,14 +500,9 @@ it("resets validation run selection when switching to another project", async ()
 it("runs, duplicates, saves changed equipment, compares snapshots and opens a printable report", async () => {
   const user = userEvent.setup();
   render(<App />);
-  await screen.findByRole("combobox", { name: "후보지 선택" });
-  await user.click(
-    screen.getByRole("button", { name: "분석 실행", exact: true }),
-  );
-  await screen.findByText("분석 완료");
-  await user.click(screen.getByText("관리"));
+  await runFirstAnalysis(user);
+  await user.click(stepButton(/부지·기자재/));
   await user.click(screen.getByRole("button", { name: "대안 복제", exact: true }));
-  await user.click(screen.getByRole("tab", { name: "설계 조건" }));
   await waitFor(() => expect(designs.length).toBe(2));
   await waitFor(() =>
     expect(
@@ -483,7 +510,6 @@ it("runs, duplicates, saves changed equipment, compares snapshots and opens a pr
         .value,
     ).toBe("복제안"),
   );
-  await user.click(screen.getByRole("tab", { name: "② 기자재" }));
   const count = screen.getByRole("spinbutton", { name: "모듈 수량" });
   await user.clear(count);
   await user.type(count, "500");
@@ -491,6 +517,7 @@ it("runs, duplicates, saves changed equipment, compares snapshots and opens a pr
     screen.getByRole("button", { name: "조건 저장", exact: true }),
   );
   await waitFor(() => expect(designs[1].equipment.module_count).toBe(500));
+  await user.click(screen.getByRole("button", { name: "다음", exact: true }));
   await user.click(
     screen.getByRole("button", { name: "분석 실행", exact: true }),
   );
@@ -514,7 +541,48 @@ it("runs, duplicates, saves changed equipment, compares snapshots and opens a pr
   await user.click(
     screen.getByRole("button", { name: "사업성 검토", exact: true }),
   );
-  await user.click(screen.getByRole("tab", { name: "결과" }));
-  await user.click(screen.getByRole("tab", { name: /재무성/ }));
+  await user.click(stepButton(/재무성 분석/));
   expect((await screen.findAllByText("산정 불가")).length).toBeGreaterThan(0);
+});
+it("shows manufacturer catalog specs for the selected module and inverter", () => {
+  const catalog = {
+    defaults: { equipment: {}, costs: {}, finance: {} },
+    guideline: "test",
+    modules: [
+      {
+        id: "hd_his_t650uj", label: "HD현대 UJ", module_power_w: 650, module_width_m: 1.134,
+        module_height_m: 2.465, module_price: 325000, source: "HD현대에너지솔루션 제품 페이지",
+        manufacturer: "HD현대에너지솔루션", series: "UJ 시리즈 (HiS-T640~650UJ)", efficiency_pct: 23.3,
+        thickness_mm: 35, weight_kg: 35, features: ["TOPCon"], price_basis: "견적 가정",
+      },
+    ],
+    inverters: [
+      {
+        id: "qvolt_p110ta", manufacturer: "한화큐셀", model: "Q.VOLT P110TA", kw: 110, max_kva: 121,
+        max_efficiency_pct: 98.01, euro_efficiency_pct: 97.73, mppt: 10, channels: 20, weight_kg: 96,
+        size_mm: "1006 × 891 × 329", features: ["AFCI"], unit_cost: 16500000, price_basis: "견적 가정",
+        source: "한화큐셀 제품 페이지", warranty: null,
+      },
+    ],
+  } as Catalog;
+  const design = structuredClone(initial);
+  design.equipment = { ...design.equipment, module_preset: "hd_his_t650uj", inverter_model: "qvolt_p110ta", module_count: 100 };
+  render(
+    <DesignEditor design={design} show={["equipment"]} catalog={catalog} onChange={() => {}} onSave={() => {}} dirty={false} saving={false} />,
+  );
+  expect(screen.getByText("UJ 시리즈 (HiS-T640~650UJ)")).toBeTruthy();
+  expect(screen.getByText("Q.VOLT P110TA")).toBeTruthy();
+  expect(
+    (screen.getByRole("img", { name: "Q.VOLT P110TA 제품 사진" }) as HTMLImageElement).src,
+  ).toContain("catalog/qvolt_p110ta.webp");
+  expect(screen.getByText("98.01 / 97.73%")).toBeTruthy();
+  expect(screen.getByText(/^65(.0)? kW$/)).toBeTruthy();
+  expect(screen.queryByRole("spinbutton", { name: "인버터 효율 · 물리 모델" })).toBeNull();
+  expect(screen.queryByRole("spinbutton", { name: "모듈 최대전압 Vmp" })).toBeNull();
+  cleanup();
+  render(
+    <DesignEditor design={design} show={["costs"]} catalog={catalog} onChange={() => {}} onSave={() => {}} dirty={false} saving={false} />,
+  );
+  expect(screen.getByRole("spinbutton", { name: "모듈 견적 단가 (0 = 가이드라인·환산 단가)" })).toBeTruthy();
+  expect(screen.getByRole("spinbutton", { name: "인버터 견적 단가 (0 = 환산 단가)" })).toBeTruthy();
 });

@@ -71,7 +71,8 @@ def test_seed_catalog_and_crud_persistence(client, repository):
     assert len(data["designs"]) == 5
     assert data["runs"] == []
     catalog = client.get("/api/catalogs").json()
-    assert {module["id"] for module in catalog["modules"]} == {"floating_450", "land_480"}
+    assert {module["id"] for module in catalog["modules"]} == {"floating_450", "land_480", "hd_his_t650uj"}
+    assert {item["model"] for item in catalog["inverters"]} >= {"Q.VOLT P110TA", "Q.VOLT P60TA", "Q.VOLT P125T-X"}
     assert catalog["defaults"]["equipment"]["module_preset"] == "floating_450"
     created = client.post("/api/projects", json={"name": "새 사업", "description": "검토"})
     assert created.status_code == 201

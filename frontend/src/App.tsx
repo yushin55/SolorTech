@@ -51,7 +51,7 @@ import {
 import type { Grade } from "./mapData";
 import Validation from "./Validation";
 import { ModelValidation, PlantRecords, WeatherValidation } from "./Records";
-import { GLOSSARY, ReviewSteps, Verdict } from "./Steps";
+import { GLOSSARY, ReferenceBacktest, StepResult, Stepper, Verdict, WIZARD_STEPS } from "./Steps";
 import ReportBody from "./Report";
 
 type Page = "review" | "data" | "weather" | "model" | "compare" | "validation" | "report";
@@ -70,7 +70,6 @@ const icons: Record<Page, LucideIcon> = {
   model: ChartLine,
   validation: FileUp,
 };
-type View = "result" | "map" | "design";
 const pages: {
   id: Page;
   group: "검토" | "근거 데이터" | "도구";
@@ -302,7 +301,7 @@ export default function App() {
     [candidateId, setCandidateId] = useState(""),
     [designId, setDesignId] = useState(""),
     [page, setPage] = useState<Page>("review"),
-    [view, setView] = useState<View>("result"),
+    [step, setStep] = useState(0),
     [draft, setDraft] = useState<Design | null>(null),
     [activeRun, setActiveRun] = useState<Run | null>(null),
     [historyId, setHistoryId] = useState(""),
@@ -338,6 +337,10 @@ export default function App() {
       .filter((r) => r.design_id === designId)
       .sort((a, b) => b.created_at.localeCompare(a.created_at)) || [];
   const chosenRunId = historyId || history[0]?.id || "";
+  const candidateDesigns =
+    workspace?.designs.filter((d) => d.candidate_id === candidateId) || [];
+  // Steps ④–⑥ show computed results, so they open once an analysis exists.
+  const reachable = !candidate ? 0 : !design ? 1 : activeRun?.result ? 5 : 2;
   const stale =
     !!activeRun &&
     (dirty ||
@@ -386,6 +389,7 @@ export default function App() {
     if (!projectId) return;
     localStorage.setItem("solar-project", projectId);
     setHistoryId("");
+    setStep(0);
     setActiveRun(null);
     setLoading(true);
     void refreshWorkspace(projectId)
@@ -477,6 +481,23 @@ export default function App() {
       setRunning(false);
     }
   }
+  /** Moves through the wizard; going forward saves the conditions entered so far. */
+  async function goTo(next: number) {
+    if (next > step && dirty) {
+      setSaving(true);
+      try {
+        await saveDesignStrict();
+        await refreshWorkspace(projectId);
+      } catch (e) {
+        handleError(e);
+        return;
+      } finally {
+        setSaving(false);
+      }
+    }
+    setStep(next);
+    document.querySelector(".wizard")?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+  }
   async function saveDesignStrict() {
     if (!draft) return;
     const { id, project_id, ...payload } = draft;
@@ -505,6 +526,7 @@ export default function App() {
       await refreshWorkspace(projectId);
       setDesignId(d.id);
       setPage("review");
+      setStep(1);
       setSelected((s) => [...s, d.id]);
     } catch (e) {
       handleError(e);
@@ -754,7 +776,7 @@ export default function App() {
         b.created_at.localeCompare(a.created_at),
       )[0]
     : null;
-  const showRun = page === "review" || page === "report";
+  const showRun = page === "report";
   const mappable = workspace?.candidates.filter(hasGeometry) || [];
   return (
     <div className="app">
@@ -920,118 +942,14 @@ export default function App() {
         ) : (
           <>
             {page === "review" && (
-              <>
-                <div className="workbar">
-                  <label>
-                    <span>후보지</span>
-                    <select
-                      aria-label="후보지 선택"
-                      value={candidateId}
-                      onChange={(e) => {
-                        const id = e.target.value;
-                        setCandidateId(id);
-                        setDesignId(workspace.designs.find((d) => d.candidate_id === id)?.id || "");
-                        setHistoryId("");
-                      }}
-                    >
-                      {workspace.candidates.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                      {!workspace.candidates.length && <option value="">후보지 없음</option>}
-                    </select>
-                  </label>
-                  <label>
-                    <span>설계 대안</span>
-                    <select
-                      aria-label="설계 대안 선택"
-                      value={designId}
-                      onChange={(e) => setDesignId(e.target.value)}
-                    >
-                      {workspace.designs
-                        .filter((d) => d.candidate_id === candidateId)
-                        .map((d) => (
-                          <option key={d.id} value={d.id}>
-                            {d.name}
-                          </option>
-                        ))}
-                    </select>
-                  </label>
-                  <details className="dropdown">
-                    <summary className="btn ghost">관리</summary>
-                    <div className="menu-list">
-                      <span className="menu-label">후보지</span>
-                      <button onClick={(e) => { closeMenu(e); newCandidate(); }}>새 후보지 추가</button>
-                      {candidate && (
-                        <>
-                          <button onClick={(e) => { closeMenu(e); setModal({ kind: "candidate", candidate }); }}>
-                            이름·좌표·수심 수정
-                          </button>
-                          {candidate.geometry && (
-                            <button onClick={(e) => { closeMenu(e); exportGeo(); }}>GeoJSON 내보내기</button>
-                          )}
-                          <label>
-                            GeoJSON 가져오기
-                            <input
-                              type="file"
-                              accept=".geojson,.json"
-                              onChange={(e) => {
-                                const f = e.target.files?.[0];
-                                closeMenu(e);
-                                if (f) void importGeo(f);
-                                e.target.value = "";
-                              }}
-                            />
-                          </label>
-                          {candidate.exclusions.length > 0 && (
-                            <button onClick={(e) => { closeMenu(e); void updateCandidate({ exclusions: [] }); }}>
-                              제외 구역 모두 지우기
-                            </button>
-                          )}
-                          <button className="danger" onClick={(e) => { closeMenu(e); void remove("candidate", candidate.id); }}>
-                            후보지 삭제
-                          </button>
-                        </>
-                      )}
-                      <span className="menu-label">설계 대안</span>
-                      <button disabled={!candidate} onClick={(e) => { closeMenu(e); void addDesign(); }}>
-                        새 대안 추가
-                      </button>
-                      {design && (
-                        <>
-                          <button onClick={(e) => { closeMenu(e); void duplicateDesign(); }}>대안 복제</button>
-                          <button className="danger" onClick={(e) => { closeMenu(e); void remove("design", design.id); }}>
-                            대안 삭제
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </details>
-                  <div className="context-right">
-                    {history.length > 1 && (
-                      <select
-                        aria-label="분석 이력"
-                        value={chosenRunId}
-                        onChange={(e) => setHistoryId(e.target.value)}
-                      >
-                        {history.map((r) => (
-                          <option key={r.id} value={r.id}>
-                            {date(r.created_at)} ·{" "}
-                            {r.status === "completed" ? "완료" : r.status === "failed" ? "실패" : "계산 중"}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                    <span
-                      className={
-                        "status " +
-                        (currentPending ? "pending" : activeRun?.status === "completed" ? "done" : "")
-                      }
-                    >
-                      {currentPending ? "계산 중" : activeRun?.status === "completed" ? "분석 완료" : "분석 전"}
-                    </span>
-                  </div>
+              <div className="wizard">
+                <Stepper current={step} reachable={reachable} onSelect={goTo} />
+                <div className="wizard-head">
+                  <span className="wizard-count">
+                    {step + 1}단계 / {WIZARD_STEPS.length}
+                  </span>
+                  <h2>{WIZARD_STEPS[step].title}</h2>
+                  <p>{WIZARD_STEPS[step].description}</p>
                 </div>
                 {activeRun?.status === "failed" && (
                   <div className="banner error">
@@ -1039,7 +957,7 @@ export default function App() {
                     <button onClick={() => void analyze()}>다시 분석</button>
                   </div>
                 )}
-                {stale && (
+                {stale && step >= 2 && (
                   <div className="banner warning">
                     <span>
                       현재 조건이 분석 시점과 다릅니다. 아래 결과는 이전 조건으로
@@ -1048,72 +966,67 @@ export default function App() {
                     <button onClick={() => void analyze()}>다시 분석</button>
                   </div>
                 )}
-                {result && !stale && <Verdict result={result} />}
-                <div className="stats">
-                  <Stat
-                    label="DC 설비용량"
-                    value={result ? num(result.capacity_dc_kw, 1) : "—"}
-                    unit="kW"
-                    sub={result ? `AC ${num(result.capacity_ac_kw)} kW` : undefined}
-                  />
-                  <Stat
-                    label="연간 발전량"
-                    value={result ? num(result.annual_kwh / 1000, 1) : "—"}
-                    unit="MWh"
-                    sub={
-                      result
-                        ? result.calibration && result.energy_basis === "calibrated"
-                          ? `범위 ${num(result.calibration.annual_p10_kwh / 1000, 0)}–${num(result.calibration.annual_p90_kwh / 1000, 0)}`
-                          : "물리 모델 단독"
-                        : undefined
-                    }
-                  />
-                  <Stat
-                    label="편익·비용비 (B/C)"
-                    badge={result && <GradeBadge grade={gradeOf(result)} />}
-                    value={result ? num(result.economics.bc, 2) : "—"}
-                    sub={result ? `총 공사비 ${num(result.economics.capex / 100000000, 1)}억 원` : undefined}
-                  />
-                  <Stat
-                    label="필요 판매단가"
-                    value={result ? num(result.economics.required_price_per_kwh, 1) : "—"}
-                    unit="원/kWh"
-                    sub={result ? `가정 단가 ${num(result.economics.effective_price_per_kwh, 0)}원` : undefined}
-                  />
-                </div>
-                <div className="segmented" role="tablist" aria-label="검토 화면">
-                  {(
-                    [
-                      ["result", "결과"],
-                      ["map", "지도·배치"],
-                      ["design", "설계 조건"],
-                    ] as const
-                  ).map(([key, label]) => (
-                    <button
-                      key={key}
-                      role="tab"
-                      aria-selected={view === key}
-                      className={view === key ? "active" : ""}
-                      onClick={() => setView(key)}
-                    >
-                      {label}
-                      {key === "design" && dirty && <i className="dot" aria-hidden="true" title="저장 안 됨" />}
-                    </button>
-                  ))}
-                </div>
-                {view === "result" &&
-                  (activeRun?.result ? (
-                    <ReviewSteps run={activeRun} />
-                  ) : (
-                    <div className="card empty">
-                      <h3>아직 분석 결과가 없습니다</h3>
-                      <p>‘설계 조건’을 확인한 뒤 오른쪽 위 ‘분석 실행’을 누르세요.</p>
-                      <button className="btn" onClick={() => setView("design")}>
-                        설계 조건 보기
-                      </button>
-                    </div>
-                  ))}
-                {view === "map" && (
+                {step === 0 && (
+                  <>
+                    <div className="workbar">
+                      <label>
+                        <span>후보지</span>
+                        <select
+                          aria-label="후보지 선택"
+                          value={candidateId}
+                          onChange={(e) => {
+                            const id = e.target.value;
+                            setCandidateId(id);
+                            setDesignId(workspace.designs.find((d) => d.candidate_id === id)?.id || "");
+                            setHistoryId("");
+                          }}
+                        >
+                          {workspace.candidates.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name}
+                            </option>
+                          ))}
+                          {!workspace.candidates.length && <option value="">후보지 없음</option>}
+                      </select>
+                    </label>
+                    <details className="dropdown">
+                      <summary className="btn ghost">후보지 관리</summary>
+                      <div className="menu-list">
+                        <button onClick={(e) => { closeMenu(e); newCandidate(); }}>새 후보지 추가</button>
+                        {candidate && (
+                          <>
+                            <button onClick={(e) => { closeMenu(e); setModal({ kind: "candidate", candidate }); }}>
+                              이름·좌표·수심 수정
+                            </button>
+                            {candidate.geometry && (
+                              <button onClick={(e) => { closeMenu(e); exportGeo(); }}>GeoJSON 내보내기</button>
+                            )}
+                            <label>
+                              GeoJSON 가져오기
+                              <input
+                                type="file"
+                                accept=".geojson,.json"
+                                onChange={(e) => {
+                                  const f = e.target.files?.[0];
+                                  closeMenu(e);
+                                  if (f) void importGeo(f);
+                                  e.target.value = "";
+                                }}
+                              />
+                            </label>
+                            {candidate.exclusions.length > 0 && (
+                              <button onClick={(e) => { closeMenu(e); void updateCandidate({ exclusions: [] }); }}>
+                                제외 구역 모두 지우기
+                              </button>
+                            )}
+                            <button className="danger" onClick={(e) => { closeMenu(e); void remove("candidate", candidate.id); }}>
+                              후보지 삭제
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </details>
+                  </div>
                   <Card title="수면 후보지" className="map-card">
                     {!candidate || candidate.geometry ? (
                       <Suspense fallback={<div className="map-loading">지도를 불러오는 중…</div>}>
@@ -1176,25 +1089,191 @@ export default function App() {
                       지역을 검색한 뒤 ‘이 지역 수면 찾기’로 저수지·호수를 찾아 클릭하면 후보지로 추가됩니다.
                     </p>
                   </Card>
+                  {activeRun?.result && <StepResult run={activeRun} id="site" />}
+                  </>
                 )}
-                {view === "design" &&
-                  (draft ? (
+                {step === 1 && (
+                  <>
+                    <div className="workbar">
+                      <label>
+                        <span>설계 대안</span>
+                        <select
+                          aria-label="설계 대안 선택"
+                          value={designId}
+                          onChange={(e) => setDesignId(e.target.value)}
+                        >
+                          {candidateDesigns.map((d) => (
+                            <option key={d.id} value={d.id}>
+                              {d.name}
+                            </option>
+                          ))}
+                          {!candidateDesigns.length && <option value="">대안 없음</option>}
+                        </select>
+                      </label>
+                      <button className="btn" disabled={!candidate} onClick={() => void addDesign()}>
+                        새 대안 추가
+                      </button>
+                      <button className="btn" disabled={!design} onClick={() => void duplicateDesign()}>
+                        대안 복제
+                      </button>
+                      {design && (
+                        <button className="btn ghost danger-text" onClick={() => void remove("design", design.id)}>
+                          대안 삭제
+                        </button>
+                      )}
+                      <span className="context-right muted">{candidate?.name}</span>
+                    </div>
+                    {draft ? (
+                      <DesignEditor
+                        design={draft}
+                        show={["site", "equipment"]}
+                        catalog={catalog}
+                        onChange={setDraft}
+                        onSave={() => void saveDesign()}
+                        dirty={dirty}
+                        saving={saving}
+                      />
+                    ) : (
+                      <div className="card empty">
+                        <h3>설계 대안이 없습니다</h3>
+                        <button className="btn primary" disabled={!candidate} onClick={() => void addDesign()}>
+                          대안 추가
+                        </button>
+                      </div>
+                    )}
+                    {activeRun?.result && <StepResult run={activeRun} id="equipment" />}
+                  </>
+                )}
+                {step === 2 && (
+                  <>
+                    <section className="card run-panel">
+                      <div>
+                        <h3>
+                          {candidate?.name} · {design?.name}
+                        </h3>
+                        <p className="hint">
+                          1991~2020년 ERA5 시간자료를 기상청 일사계로 보정해 계산하고, K-water 운영실적으로 검증한
+                          보정 모델을 적용합니다. 처음 분석하는 위치는 1분가량 걸립니다.
+                        </p>
+                      </div>
+                      <div className="run-panel-actions">
+                        {history.length > 1 && (
+                          <select
+                            aria-label="분석 이력"
+                            value={chosenRunId}
+                            onChange={(e) => setHistoryId(e.target.value)}
+                          >
+                            {history.map((r) => (
+                              <option key={r.id} value={r.id}>
+                                {date(r.created_at)} ·{" "}
+                                {r.status === "completed" ? "완료" : r.status === "failed" ? "실패" : "계산 중"}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        <span
+                          className={
+                            "status " +
+                            (currentPending ? "pending" : activeRun?.status === "completed" ? "done" : "")
+                          }
+                        >
+                          {currentPending ? "계산 중" : activeRun?.status === "completed" ? "분석 완료" : "분석 전"}
+                        </span>
+                        <button
+                          className="btn primary"
+                          disabled={!design || running || currentPending}
+                          onClick={() => void analyze()}
+                        >
+                          {(running || currentPending) && <span className="spinner" />}
+                          {currentPending ? "분석 진행 중" : activeRun?.result ? "다시 분석" : "분석 실행"}
+                        </button>
+                      </div>
+                    </section>
+                    {activeRun?.result ? (
+                      <>
+                        <StepResult run={activeRun} id="energy" />
+                        {activeRun.result.reference && <ReferenceBacktest reference={activeRun.result.reference} />}
+                      </>
+                    ) : (
+                      <div className="card empty">
+                        <h3>아직 분석 결과가 없습니다</h3>
+                        <p>‘분석 실행’을 누르면 ③~⑥단계가 한 번에 계산되고 다음 단계로 넘어갈 수 있습니다.</p>
+                      </div>
+                    )}
+                  </>
+                )}
+                {step >= 3 && draft && (
+                  <>
+                    {step === 5 && result && !stale && <Verdict result={result} />}
+                    {step === 5 && (
+                      <div className="stats">
+                        <Stat
+                          label="DC 설비용량"
+                          value={result ? num(result.capacity_dc_kw, 1) : "—"}
+                          unit="kW"
+                          sub={result ? `AC ${num(result.capacity_ac_kw)} kW` : undefined}
+                        />
+                        <Stat
+                          label="연간 발전량"
+                          value={result ? num(result.annual_kwh / 1000, 1) : "—"}
+                          unit="MWh"
+                          sub={
+                            result
+                              ? result.calibration && result.energy_basis === "calibrated"
+                                ? `범위 ${num(result.calibration.annual_p10_kwh / 1000, 0)}–${num(result.calibration.annual_p90_kwh / 1000, 0)}`
+                                : "물리 모델 단독"
+                              : undefined
+                          }
+                        />
+                        <Stat
+                          label="편익·비용비 (B/C)"
+                          badge={result && <GradeBadge grade={gradeOf(result)} />}
+                          value={result ? num(result.economics.bc, 2) : "—"}
+                          sub={result ? `총 공사비 ${num(result.economics.capex / 100000000, 1)}억 원` : undefined}
+                        />
+                        <Stat
+                          label="필요 판매단가"
+                          value={result ? num(result.economics.required_price_per_kwh, 1) : "—"}
+                          unit="원/kWh"
+                          sub={result ? `가정 단가 ${num(result.economics.effective_price_per_kwh, 0)}원` : undefined}
+                        />
+                      </div>
+                    )}
                     <DesignEditor
                       design={draft}
+                      show={[step === 3 ? "costs" : step === 4 ? "revenue" : "finance"]}
                       onChange={setDraft}
                       onSave={() => void saveDesign()}
                       dirty={dirty}
                       saving={saving}
                     />
+                    {activeRun?.result && (
+                      <StepResult run={activeRun} id={WIZARD_STEPS[step].id} />
+                    )}
+                  </>
+                )}
+                <div className="wizard-nav">
+                  <button className="btn outline" disabled={step === 0} onClick={() => void goTo(step - 1)}>
+                    이전
+                  </button>
+                  {step < WIZARD_STEPS.length - 1 ? (
+                    <button
+                      className="btn primary"
+                      disabled={step >= reachable || saving}
+                      onClick={() => void goTo(step + 1)}
+                    >
+                      다음
+                    </button>
                   ) : (
-                    <div className="card empty">
-                      <h3>설계 대안이 없습니다</h3>
-                      <button className="btn primary" disabled={!candidate} onClick={() => void addDesign()}>
-                        대안 추가
-                      </button>
-                    </div>
-                  ))}
-              </>
+                    <button className="btn primary" onClick={() => setPage("report")}>
+                      검토 보고서 보기
+                    </button>
+                  )}
+                </div>
+                {step === 2 && !activeRun?.result && (
+                  <p className="hint wizard-note">분석을 실행하면 다음 단계로 넘어갈 수 있습니다.</p>
+                )}
+              </div>
             )}
             {page === "data" && <PlantRecords onError={handleError} />}
             {page === "model" && <ModelValidation onError={handleError} />}
@@ -1388,12 +1467,12 @@ export default function App() {
                     연결 위치를 지정합니다.
                   </li>
                   <li>
-                    오른쪽 패널에서 가이드라인 단계별(① 대상지 · ② 기자재 · ④
-                    공사비 · ⑤⑥ 수익·재무) 조건을 입력하고 저장합니다.
+                    <b>다음</b>을 눌러 ② 설계 대안·기자재 조건을 정하고, ③에서{" "}
+                    <b>분석 실행</b>을 누릅니다. 다음으로 넘어갈 때 입력한 조건이 저장됩니다.
                   </li>
                   <li>
-                    <b>분석 실행</b>을 누르면 ①~⑥ 단계 결과와 필요 판매단가,
-                    발전량 감소 시 B/C를 확인할 수 있습니다.
+                    ④ 공사비 · ⑤ 수익 · ⑥ 재무 단계에서 조건을 고치고 결과를 확인합니다. 조건을
+                    바꾸면 <b>다시 분석</b>으로 반영하고, 마지막 단계에서 결론과 보고서를 봅니다.
                   </li>
                 </ol>
                 <p className="hint">

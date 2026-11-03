@@ -19,7 +19,7 @@ from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
 from . import calibration, kma, kwater, weather
-from .engine import guideline
+from .engine import catalog, guideline
 from .geocoding import search_places
 from .seed import seed_candidates
 from .waterbodies import find_water_bodies
@@ -244,7 +244,9 @@ def create_app(repository=None, seed=None):
     @app.get("/api/catalogs")
     def catalogs():
         values = defaults()
-        return {"modules": [{"id": key, **value} for key, value in guideline.MODULES.items()],
+        return {"modules": [{"id": key, **value} for key, value in guideline.MODULES.items()]
+                + [{"id": key, **value} for key, value in catalog.MODULES.items()],
+                "inverters": [{"id": key, **value} for key, value in catalog.INVERTERS.items()],
                 "inverter_units": [{"kw": kw, "unit_cost": cost, "junction": guideline.JUNCTION[kw]}
                                    for kw, cost in guideline.INVERTER_UNITS.items()],
                 "string_example": guideline.STRING_EXAMPLE, "guideline": guideline.SOURCE, "defaults": values}

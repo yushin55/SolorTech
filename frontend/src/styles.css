@@ -2385,35 +2385,6 @@ td.emph {
   font-size: 12px;
   font-weight: 600;
 }
-.segmented {
-  display: inline-flex;
-  align-self: flex-start;
-  gap: 4px;
-  padding: 4px;
-  border-radius: 10px;
-  background: #e9ecf1;
-}
-.segmented button {
-  position: relative;
-  padding: 8px 18px;
-  border-radius: 8px;
-  color: var(--text-2);
-  font-weight: 600;
-}
-.segmented button.active {
-  background: var(--surface);
-  color: var(--primary);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.1);
-}
-.segmented .dot {
-  position: absolute;
-  top: 7px;
-  right: 7px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--warn);
-}
 details.step > summary {
   list-style: none;
   cursor: pointer;
@@ -2442,10 +2413,6 @@ details.step:not([open]) .step-summary {
   position: static;
   max-height: none;
 }
-.inspector .tabs {
-  margin-top: 4px;
-  align-self: flex-start;
-}
 .inspector .fields {
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
 }
@@ -2460,77 +2427,296 @@ details.step:not([open]) .step-summary {
 .inspector .field.full {
   grid-column: auto;
 }
-.inspector .tabs button {
-  white-space: nowrap;
-  padding-left: 14px;
-  padding-right: 14px;
-}
 .inspector-body > .field:first-child {
   max-width: 480px;
 }
-/* ---------- Six-step board ---------- */
-.step-board {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 10px;
-}
-.step-board button {
-  position: relative;
+/* ---------- Review wizard (guideline six steps, one at a time) ---------- */
+.wizard {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  padding: 12px 14px;
+  gap: 16px;
+  scroll-margin-top: 16px;
+}
+.stepper {
+  display: flex;
+  margin: 0;
+  padding: 18px 8px 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
-  text-align: left;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  list-style: none;
 }
-.step-board button:hover {
-  border-color: var(--line-strong);
+.stepper li {
+  position: relative;
+  display: flex;
+  flex: 1;
+  justify-content: center;
 }
-.step-board button.active {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 1px var(--primary);
-  background: var(--primary-weak);
+/* Connector from the previous dot's centre to this one's. */
+.stepper li + li::before {
+  content: "";
+  position: absolute;
+  top: 19px;
+  right: 50%;
+  width: 100%;
+  height: 2px;
+  background: var(--line);
 }
-.step-board .step-no {
-  display: inline-grid;
+.stepper li.done::before,
+.stepper li.current::before {
+  background: var(--primary);
+}
+.stepper button {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px;
+}
+.stepper button:disabled {
+  opacity: 1;
+}
+.stepper-dot {
+  display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
-  margin-bottom: 4px;
+  width: 40px;
+  height: 40px;
+  border: 2px solid var(--line-strong);
   border-radius: 50%;
-  background: var(--subtle);
+  background: var(--surface);
   color: var(--muted);
-  font-size: 12px;
+  font-size: 15px;
   font-weight: 700;
+  transition: background 0.15s, border-color 0.15s;
 }
-.step-board button.active .step-no {
+.stepper li.done .stepper-dot {
+  border-color: var(--primary);
+  background: var(--primary-weak);
+  color: var(--primary);
+}
+.stepper li.current .stepper-dot {
+  border-color: var(--primary);
   background: var(--primary);
   color: #fff;
+  box-shadow: 0 0 0 4px rgb(37 99 235 / 0.18);
 }
-.step-board .step-label {
+.stepper button:not(:disabled):hover .stepper-dot {
+  border-color: var(--primary);
+}
+.stepper button:disabled .stepper-dot {
+  border-style: dashed;
+  color: #9ca3af;
+}
+.stepper-label {
   color: var(--muted);
   font-size: 13px;
-}
-.step-board b {
-  font-size: 17px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
+  font-weight: 500;
   white-space: nowrap;
 }
+.stepper li.current .stepper-label {
+  color: var(--text);
+  font-weight: 700;
+}
+.wizard-head {
+  padding: 4px 2px 0;
+}
+.wizard-count {
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+.wizard-head h2 {
+  margin: 2px 0 4px;
+  font-size: 22px;
+  letter-spacing: -0.01em;
+}
+.wizard-head p {
+  color: var(--muted);
+}
+.inspector-section + .inspector-section {
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.inspector-section h4 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+.inspector-section .hint {
+  margin-top: 10px;
+}
+.run-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 24px;
+}
+.run-panel h3 {
+  margin-bottom: 4px;
+  font-size: 17px;
+}
+.run-panel .hint {
+  max-width: 640px;
+}
+.run-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.run-panel-actions .btn {
+  min-width: 140px;
+  min-height: 46px;
+  font-size: 16px;
+}
 .step-detail {
-  min-height: 240px;
+  min-height: 160px;
 }
-@media (max-width: 1200px) {
-  .step-board {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+.wizard-nav {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 8px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+}
+.wizard-nav .btn {
+  min-width: 180px;
+  min-height: 50px;
+  font-size: 16px;
+}
+.btn.outline {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.btn.outline:hover:not(:disabled) {
+  background: var(--primary-weak);
+}
+.wizard-note {
+  margin-top: -8px;
+  text-align: center;
+}
+@media (max-width: 760px) {
+  .stepper {
+    padding: 14px 0 10px;
+  }
+  .stepper-dot {
+    width: 32px;
+    height: 32px;
+    font-size: 13px;
+  }
+  .stepper li + li::before {
+    top: 15px;
+  }
+  /* Only the current step keeps its label on narrow screens. */
+  .stepper li:not(.current) .stepper-label {
+    display: none;
+  }
+  .stepper-label {
+    white-space: normal;
+    text-align: center;
+  }
+  .wizard-nav .btn {
+    flex: 1;
+    min-width: 0;
   }
 }
-@media (max-width: 600px) {
-  .step-board {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+.catalog-specs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+.catalog-card {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.catalog-card header {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 10px;
+}
+.catalog-card header small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.catalog-card header strong {
+  font-size: 16px;
+}
+.catalog-card dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 14px;
+  margin: 0;
+  font-size: 13px;
+}
+.catalog-card dt {
+  color: var(--primary);
+  font-weight: 600;
+}
+.catalog-card dd {
+  margin: 0;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.catalog-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.catalog-tags li {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--subtle);
+  color: var(--text-2);
+  font-size: 12px;
+}
+.catalog-note {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.catalog-photo {
+  display: block;
+  width: 100%;
+  height: 160px;
+  margin-bottom: 12px;
+  border-radius: 6px;
+  background: #f7f7f7;
+  object-fit: contain;
+}
+.catalog-credit {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.module-loads,
+.module-comparison {
+  margin-top: 18px;
+}
+.module-loads h4,
+.module-comparison h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+.module-comparison .tag {
+  margin-left: 6px;
+}
+.load-ok {
+  color: var(--good);
+  font-weight: 700;
+}
+.load-fail {
+  color: var(--danger);
+  font-weight: 700;
 }

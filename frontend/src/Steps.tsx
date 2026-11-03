@@ -1,5 +1,6 @@
-import { Children, createContext, useContext, useState } from "react";
+import { Children } from "react";
 import type { ReactElement, ReactNode } from "react";
+import { Check } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -60,10 +61,79 @@ export function Term({ name, children }: { name: keyof typeof GLOSSARY | string;
   );
 }
 
-// Steps open by default; the others show only their one-line summary.
-const OPEN_STEPS = new Set(["energy", "finance"]);
-// The printable report expands every step.
-const ExpandAll = createContext(false);
+export type StepId = "site" | "equipment" | "energy" | "costs" | "revenue" | "finance";
+/** The review wizard walks the guideline's six steps in order, like a sign-up flow. */
+export const WIZARD_STEPS: { id: StepId; label: string; title: string; description: string }[] = [
+  {
+    id: "site",
+    label: "설치대상지 선정",
+    title: "① 설치대상지 선정",
+    description: "검토할 수면 후보지를 고르거나 지도에서 새로 추가합니다. 경계·제외 구역·연결점도 여기서 지정합니다.",
+  },
+  {
+    id: "equipment",
+    label: "부지·기자재",
+    title: "② 부지면적 및 기자재 기술사양",
+    description: "설계 대안을 고르거나 추가하고, 구조물·경사각과 모듈·인버터 조건을 정합니다.",
+  },
+  {
+    id: "energy",
+    label: "설치용량·발전량",
+    title: "③ 설치용량 및 연간발전량",
+    description: "분석을 실행해 후보지 위치의 30년 실제 기상으로 설치용량과 연간 발전량을 계산합니다.",
+  },
+  {
+    id: "costs",
+    label: "개략공사비",
+    title: "④ 개략공사비",
+    description: "가이드라인 단가와 견적 가정으로 총 공사비를 산정합니다. ‘견적 가정’ 항목은 실제 견적으로 바꾸세요.",
+  },
+  {
+    id: "revenue",
+    label: "예상수익",
+    title: "⑤ 예상수익",
+    description: "판매 단가 방식과 단가를 정해 1년차 수익을 확인합니다.",
+  },
+  {
+    id: "finance",
+    label: "재무성 분석",
+    title: "⑥ 재무성 분석 및 에너지 대체효과",
+    description: "사업기간·할인율로 B/C, NPV, IRR과 발전량이 줄었을 때의 B/C를 확인하고 결론을 냅니다.",
+  },
+];
+/** Numbered progress indicator; steps beyond `reachable` stay locked. */
+export function Stepper({
+  current,
+  reachable,
+  onSelect,
+}: {
+  current: number;
+  reachable: number;
+  onSelect: (index: number) => void;
+}) {
+  return (
+    <ol className="stepper" aria-label="가이드라인 6단계">
+      {WIZARD_STEPS.map((s, i) => {
+        const state = i === current ? "current" : i < current ? "done" : "todo";
+        return (
+          <li key={s.id} className={state}>
+            <button
+              type="button"
+              disabled={i > reachable}
+              aria-current={i === current ? "step" : undefined}
+              onClick={() => onSelect(i)}
+            >
+              <span className="stepper-dot">
+                {state === "done" ? <Check size={18} strokeWidth={2.5} aria-hidden="true" /> : i + 1}
+              </span>
+              <span className="stepper-label">{s.label}</span>
+            </button>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
 
 type StepProps = {
   id: string;
@@ -74,7 +144,7 @@ type StepProps = {
 };
 function Step({ id, title, source, summary, children }: StepProps) {
   return (
-    <details className="card step" id={`step-${id}`} open={useContext(ExpandAll) || OPEN_STEPS.has(id)}>
+    <details className="card step" id={`step-${id}`} open>
       <summary>
         <div className="card-heading">
           <h3>{title}</h3>
@@ -169,6 +239,91 @@ function Facts({ rows }: { rows: [string, ReactNode, string?][] }) {
   );
 }
 
+type EquipmentResult = Result["steps"]["equipment"];
+function ModuleLoads({ loads }: { loads: NonNullable<EquipmentResult["module_loads"]> }) {
+  const check = (load: number, rating: number, ok: boolean) =>
+    `${num(load)} Pa / 허용 ${num(rating)} Pa · ${ok ? `여유 ${num(rating / load, 1)}배` : "초과"}`;
+  return (
+    <div className="module-loads">
+      <h4>모듈 하중 검토</h4>
+      <Facts
+        rows={[
+          [
+            "부유체 상재 하중",
+            `${num(loads.total_weight_kg / 1000, 1)} t`,
+            `${num(loads.weight_kg, 1)} kg × ${num(loads.module_count)}장 · 모듈 면적당 ${num(loads.weight_per_m2, 1)} kg/㎡ (부유체 견적 근거)`,
+          ],
+          [
+            "풍하중",
+            <span className={loads.wind_ok ? "load-ok" : "load-fail"}>{loads.wind_ok ? "적합" : "부적합"}</span>,
+            `최대풍속 ${loads.wind_speed_ms} m/s 속도압 ${check(loads.wind_pressure_pa, loads.wind_rating_pa, loads.wind_ok)}`,
+          ],
+          [
+            "적설하중",
+            <span className={loads.snow_ok ? "load-ok" : "load-fail"}>{loads.snow_ok ? "적합" : "부적합"}</span>,
+            `지상적설하중 ${check(loads.snow_load_pa, loads.snow_rating_pa, loads.snow_ok)}`,
+          ],
+        ]}
+      />
+      <p className="hint">
+        허용하중: {loads.rating_basis}. {loads.basis}
+      </p>
+    </div>
+  );
+}
+function ModuleComparison({
+  comparison,
+}: {
+  comparison: NonNullable<EquipmentResult["module_comparison"]>;
+}) {
+  const area = comparison.usable_area_m2 != null;
+  return (
+    <div className="module-comparison">
+      <h4>모듈별 같은 수면 설치 비교</h4>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>모듈</th>
+              <th>출력</th>
+              <th>배열 간격</th>
+              <th>1,000㎡당 용량</th>
+              {area && <th>최대 설치</th>}
+              <th>모듈 단가</th>
+            </tr>
+          </thead>
+          <tbody>
+            {comparison.items.map((m) => (
+              <tr key={m.id} className={m.selected ? "active" : undefined}>
+                <th>
+                  {m.label}
+                  {m.selected && <span className="tag">선택</span>}
+                </th>
+                <td>{num(m.module_power_w)} Wp</td>
+                <td>{num(m.pitch_m, 2)} m</td>
+                <td>{num(m.kw_per_1000m2, 1)} kW</td>
+                {area && (
+                  <td>
+                    {num(m.max_kw ?? 0, 1)} kW ({num(m.max_modules ?? 0)}장)
+                  </td>
+                )}
+                <td>
+                  {num(m.price_per_kw / 10000, 1)}만 원/kW
+                  {m.price_source.includes("가정") && <span className="tag assumed">견적 가정</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="hint">
+        {comparison.basis}
+        {area ? ` · 이용 가능 수면 ${num(comparison.usable_area_m2! / 10000, 2)} ha 기준` : " · 후보지 경계가 없어 면적당 값만 비교"}
+      </p>
+    </div>
+  );
+}
+
 export function MonthlyEnergyChart({ result }: { result: Result }) {
   const calibrated = result.energy_basis === "calibrated";
   const data = result.monthly.map((m) => ({
@@ -221,21 +376,36 @@ export function MonthlyEnergyChart({ result }: { result: Result }) {
   );
 }
 
-export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: boolean }) {
+/** Every guideline step, fully expanded (printable report appendix). */
+export function ReviewSteps({ run }: { run: Run }) {
   const result = run.result!;
+  return (
+    <div className="stack">
+      {guidelineSteps(result)}
+      {result.reference && <ReferenceBacktest reference={result.reference} />}
+    </div>
+  );
+}
+/** One step's computed detail, shown inside the review wizard. */
+export function StepResult({ run, id }: { run: Run; id: StepId }) {
+  const step = guidelineSteps(run.result!).find((s) => s.props.id === id)!;
+  const { source, summary, children } = step.props;
+  return (
+    <section className="card step-detail" aria-label={`${step.props.title} 산정 결과`}>
+      <div className="card-heading">
+        <h3>산정 결과</h3>
+        {source && <span className="source-chip">{source}</span>}
+      </div>
+      {summary && <p className="step-summary">{summary}</p>}
+      {children}
+    </section>
+  );
+}
+function guidelineSteps(result: Result) {
   const { site, equipment, costs, revenue, substitution } = result.steps;
   const e = result.economics;
   const cal = result.calibration;
-  // Short label and headline number per step for the board view.
-  const highlights: Record<string, [string, string]> = {
-    site: ["설치대상지", site.structure_type === "seasonal" ? "가변형" : `고정형 ${site.tilt}°`],
-    equipment: ["기자재·용량", `${num(result.capacity_dc_kw, 0)} kW`],
-    energy: ["연간 발전량", `${num(result.annual_kwh / 1000, 0)} MWh`],
-    costs: ["개략공사비", `${num(costs.total / 100000000, 1)}억 원`],
-    revenue: ["예상수익", `${num(revenue.first_year_revenue / 100000000, 2)}억/년`],
-    finance: ["재무성", `B/C ${num(e.bc, 2)}`],
-  };
-  const steps = Children.toArray(
+  return Children.toArray(
     (
       <>
       <Step
@@ -283,7 +453,8 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
           <>
             {equipment.module.module_power_w} W 모듈 {num(equipment.module_count)}장 ={" "}
             <b>{num(result.capacity_dc_kw, 1)} kW</b>, 인버터{" "}
-            {equipment.inverter.units.map((u) => `${u.kw} kW×${u.count}`).join(" + ")}, {equipment.grid.voltage} 연계.
+            {equipment.inverter.units.map((u) => `${u.model ? u.model + " " : ""}${u.kw} kW×${u.count}`).join(" + ")},{" "}
+            {equipment.grid.voltage} 연계.
           </>
         }
       >
@@ -301,7 +472,10 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
             [
               "모듈",
               `${equipment.module.module_model}`,
-              `${num(equipment.module.module_width_m * 1000)} × ${num(equipment.module.module_height_m * 1000)} mm · ${num(equipment.module.module_price)}원/장`,
+              `${num(equipment.module.module_width_m * 1000)} × ${num(equipment.module.module_height_m * 1000)} mm · ${num(equipment.module.module_price)}원/장` +
+                (equipment.module_catalog
+                  ? ` · ${equipment.module_catalog.source}, 효율 ${equipment.module_catalog.efficiency_pct}% · 단가 견적 가정`
+                  : ""),
             ],
             [
               "어레이 이격",
@@ -315,15 +489,26 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
             ],
             [
               "인버터",
-              equipment.inverter.units.map((u) => `${u.kw} kW × ${u.count}대`).join(" + "),
-              `${equipment.inverter.rule} · AC ${num(equipment.inverter.ac_capacity_kw)} kW`,
+              equipment.inverter.units
+                .map((u) => `${u.model ? u.model + " " : ""}${u.kw} kW × ${u.count}대`)
+                .join(" + "),
+              `${equipment.inverter.rule} · AC ${num(equipment.inverter.ac_capacity_kw)} kW` +
+                (equipment.inverter_catalog
+                  ? ` · 유로효율 ${equipment.inverter_catalog.euro_efficiency_pct}% · 단가 견적 가정`
+                  : ""),
             ],
             [
               "접속반",
-              equipment.inverter.junction_boxes
-                .map((j) => `${j.channels}CH × ${j.count}면`)
-                .join(" + "),
-              "표 3-14 인버터 용량별 채널수",
+              equipment.inverter_catalog
+                ? equipment.inverter_catalog.channels
+                  ? `인버터 입력 ${equipment.inverter_catalog.channels}CH × ${num(equipment.inverter.units[0].count)}대`
+                  : `${equipment.inverter_catalog.mppt} MPPT × ${num(equipment.inverter.units[0].count)}대`
+                : equipment.inverter.junction_boxes
+                    .map((j) => `${j.channels}CH × ${j.count}면`)
+                    .join(" + "),
+              equipment.inverter_catalog
+                ? "스트링 인버터 직접 입력 · 표 3-14 접속반 미적용"
+                : "표 3-14 인버터 용량별 채널수",
             ],
             [
               "계통연계",
@@ -332,6 +517,8 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
             ],
           ]}
         />
+        {equipment.module_loads && <ModuleLoads loads={equipment.module_loads} />}
+        {equipment.module_comparison && <ModuleComparison comparison={equipment.module_comparison} />}
         {equipment.strings.warnings.map((w, i) => (
           <p className="inline-warning" key={i}>
             {w}
@@ -601,63 +788,6 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
       </>
     ).props.children,
   ) as ReactElement<StepProps>[];
-  const reference = result.reference ? <ReferenceBacktest reference={result.reference} /> : null;
-  if (expandAll)
-    return (
-      <ExpandAll.Provider value>
-        <div className="stack">
-          {steps}
-          {reference}
-        </div>
-      </ExpandAll.Provider>
-    );
-  return <StepBoard steps={steps} highlights={highlights} reference={reference} />;
-}
-
-/** Six step cards in one row; only the selected step's detail is shown. */
-function StepBoard({
-  steps,
-  highlights,
-  reference,
-}: {
-  steps: ReactElement<StepProps>[];
-  highlights: Record<string, [string, string]>;
-  reference: ReactNode;
-}) {
-  const [active, setActive] = useState("energy");
-  const current = steps.find((step) => step.props.id === active) ?? steps[0];
-  const { title, source, summary, children } = current.props;
-  return (
-    <div className="stack">
-      <div className="step-board" role="tablist" aria-label="가이드라인 6단계">
-        {steps.map((step, index) => {
-          const [label, value] = highlights[step.props.id];
-          return (
-            <button
-              key={step.props.id}
-              role="tab"
-              aria-selected={step.props.id === active}
-              className={step.props.id === active ? "active" : ""}
-              onClick={() => setActive(step.props.id)}
-            >
-              <span className="step-no">{index + 1}</span>
-              <span className="step-label">{label}</span>
-              <b>{value}</b>
-            </button>
-          );
-        })}
-      </div>
-      <section className="card step-detail" role="tabpanel" aria-label={title}>
-        <div className="card-heading">
-          <h3>{title}</h3>
-          {source && <span className="source-chip">{source}</span>}
-        </div>
-        {summary && <p className="step-summary">{summary}</p>}
-        {children}
-      </section>
-      {reference}
-    </div>
-  );
 }
 function verdict(bc: number | null) {
   if (bc == null) return "산정 불가";

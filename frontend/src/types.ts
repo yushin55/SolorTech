@@ -171,6 +171,39 @@ export type Result = {
         module_height_m: number;
         module_price: number;
       };
+      module_catalog?: CatalogModule | null;
+      inverter_catalog?: CatalogInverter | null;
+      module_loads?: {
+        weight_kg: number;
+        module_count: number;
+        total_weight_kg: number;
+        weight_per_m2: number;
+        wind_speed_ms: number;
+        wind_pressure_pa: number;
+        wind_rating_pa: number;
+        wind_ok: boolean;
+        snow_load_pa: number;
+        snow_rating_pa: number;
+        snow_ok: boolean;
+        rating_basis: string;
+        basis: string;
+      } | null;
+      module_comparison?: {
+        items: {
+          id: string;
+          label: string;
+          module_power_w: number;
+          pitch_m: number;
+          kw_per_1000m2: number;
+          max_modules: number | null;
+          max_kw: number | null;
+          price_per_kw: number;
+          price_source: string;
+          selected: boolean;
+        }[];
+        usable_area_m2: number | null;
+        basis: string;
+      };
       area_m2: number | null;
       usable_area_m2: number | null;
       max_modules_by_area: number | null;
@@ -193,7 +226,7 @@ export type Result = {
         warnings: string[];
       };
       inverter: {
-        units: { kw: number; count: number; unit_cost: number }[];
+        units: { kw: number; count: number; unit_cost: number; model?: string }[];
         ac_capacity_kw: number;
         cost: number;
         rule: string;
@@ -297,16 +330,60 @@ export type Catalog = {
     costs: Settings;
     finance: FinanceSettings;
   };
-  modules: {
-    id: string;
-    label: string;
-    module_power_w: number;
-    module_width_m: number;
-    module_height_m: number;
-    module_price: number;
-    source: string;
-  }[];
+  modules: CatalogModule[];
+  inverters?: CatalogInverter[];
   guideline: string;
+};
+/** Guideline 표 3-9 preset or a manufacturer catalog module (extra fields). */
+export type CatalogModule = {
+  id: string;
+  label: string;
+  module_power_w: number;
+  module_width_m: number;
+  module_height_m: number;
+  module_price: number;
+  source: string;
+  manufacturer?: string;
+  series?: string;
+  efficiency_pct?: number;
+  thickness_mm?: number;
+  weight_kg?: number;
+  load_pa?: string;
+  load_front_pa?: number;
+  load_rear_pa?: number;
+  load_basis?: string;
+  floating?: boolean;
+  vmp_v?: number;
+  voc_v?: number;
+  imp_a?: number;
+  isc_a?: number;
+  voltage_temp_coeff_pct?: number;
+  gamma_pdc?: number;
+  noct?: string;
+  max_system_v?: number;
+  warranty?: string;
+  features?: string[];
+  price_basis?: string;
+};
+export type CatalogInverter = {
+  id: string;
+  manufacturer: string;
+  model: string;
+  kw: number;
+  max_kva?: number;
+  rating?: string;
+  max_efficiency_pct: number;
+  euro_efficiency_pct: number;
+  mppt: number | string;
+  channels: number | null;
+  fuse_a?: string;
+  weight_kg: number | string;
+  size_mm: string;
+  features: string[];
+  unit_cost: number;
+  price_basis: string;
+  source: string;
+  warranty: string | null;
 };
 export type WaterBody = {
   id: string;
