@@ -17,6 +17,9 @@ import type { Candidate, Design, Run } from "../src/types";
 vi.mock("../src/MapView", () => ({
   default: () => <div data-testid="map">좌표 편집 지도</div>,
 }));
+vi.mock("../src/SiteMap", () => ({
+  default: () => <div data-testid="site-map">후보지 선택 지도</div>,
+}));
 vi.mock("recharts", () =>
   Object.fromEntries(
     [
@@ -417,38 +420,44 @@ describe("candidate data integrity", () => {
     expect(value.exclusions[0].coordinates[0][0][0]).toBeCloseTo(127.1);
   });
 });
-it("keeps saved analysis metrics together and warns when the draft changes", async () => {
+const stepper = () => screen.getByRole("list", { name: "검토 단계" });
+const goStep = (user: ReturnType<typeof userEvent.setup>, label: RegExp) =>
+  user.click(within(stepper()).getByRole("button", { name: label }));
+/** Step 1 → 2 → save and analyse; lands on step 3. */
+async function analyseFromStart(user: ReturnType<typeof userEvent.setup>, expected = 1) {
+  await screen.findByRole("combobox", { name: "저장된 후보지 선택" });
+  await user.click(screen.getByRole("button", { name: /^다음/ }));
+  await screen.findByRole("heading", { name: /2단계/ });
+  await user.click(screen.getByRole("button", { name: /저장하고 분석/ }));
+  await waitFor(() => expect(runs.length).toBe(expected));
+  await screen.findByRole("heading", { name: "③ 설치용량 및 연간발전량" });
+}
+it("walks the six-step wizard and warns when the draft changes", async () => {
   const user = userEvent.setup();
   render(<App />);
-  await screen.findByRole("combobox", { name: "후보지 선택" });
-  await user.click(
-    screen.getByRole("button", { name: "분석 실행", exact: true }),
-  );
-  await screen.findByText("분석 완료");
-  // The step board opens on ③ and switches to one step at a time.
-  expect(screen.getByRole("heading", { name: "③ 설치용량 및 연간발전량" })).toBeTruthy();
-  await user.click(screen.getByRole("tab", { name: /재무성/ }));
-  expect(screen.getByRole("heading", { name: "⑥ 재무성 분석 및 에너지 대체효과" })).toBeTruthy();
+  await analyseFromStart(user);
+  // Each analysis step shows only its own guideline section.
+  expect(screen.queryByRole("heading", { name: "⑥ 재무성 분석 및 에너지 대체효과" })).toBeNull();
+  for (let i = 0; i < 3; i++) await user.click(screen.getByRole("button", { name: /^다음/ }));
+  await screen.findByRole("heading", { name: "⑥ 재무성 분석 및 에너지 대체효과" });
   expect(screen.queryByRole("heading", { name: "③ 설치용량 및 연간발전량" })).toBeNull();
-  await user.click(screen.getByRole("tab", { name: "설계 조건" }));
+  const cards = document.querySelectorAll(".stat");
+  expect(cards[0].textContent).toContain("660.0");
+  expect(cards[3].textContent).toContain("115.4");
+  await goStep(user, /설계 조건/);
   await user.click(screen.getByRole("tab", { name: "② 기자재" }));
   fireEvent.change(screen.getByRole("spinbutton", { name: "모듈 수량" }), {
     target: { value: "1000" },
   });
-  await screen.findByText(/현재 조건이 분석 시점과 다릅니다/);
-  const cards = document.querySelectorAll(".stat");
-  expect(cards[0].textContent).toContain("660.0");
-  expect(cards[3].textContent).toContain("115.4");
   expect(screen.getByRole("button", { name: "조건 저장" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /저장하고 분석/ })).toBeTruthy();
+  await goStep(user, /사업성 결과/);
+  await screen.findByText(/설계 조건이 분석 시점과 다릅니다/);
 });
 it("resets validation run selection when switching to another project", async () => {
   const user = userEvent.setup();
   render(<App />);
-  await screen.findByRole("combobox", { name: "후보지 선택" });
-  await user.click(
-    screen.getByRole("button", { name: "분석 실행", exact: true }),
-  );
-  await screen.findByText("분석 완료");
+  await analyseFromStart(user);
   await user.click(
     screen.getByRole("button", { name: "실적 CSV 대조", exact: true }),
   );
@@ -465,17 +474,14 @@ it("resets validation run selection when switching to another project", async ()
     (screen.getByLabelText("비교할 분석 실행") as HTMLSelectElement).value,
   ).toBe("");
 });
-it("runs, duplicates, saves changed equipment, compares snapshots and opens a printable report", async () => {
+it("duplicates, re-analyses, registers results for comparison and opens a printable report", async () => {
   const user = userEvent.setup();
   render(<App />);
-  await screen.findByRole("combobox", { name: "후보지 선택" });
-  await user.click(
-    screen.getByRole("button", { name: "분석 실행", exact: true }),
-  );
-  await screen.findByText("분석 완료");
-  await user.click(screen.getByText("관리"));
+  await analyseFromStart(user);
+  for (let i = 0; i < 3; i++) await user.click(screen.getByRole("button", { name: /^다음/ }));
+  await user.click(screen.getAllByRole("button", { name: "결과 저장 · 비교에 등록" })[0]);
+  await goStep(user, /설계 조건/);
   await user.click(screen.getByRole("button", { name: "대안 복제", exact: true }));
-  await user.click(screen.getByRole("tab", { name: "설계 조건" }));
   await waitFor(() => expect(designs.length).toBe(2));
   await waitFor(() =>
     expect(
@@ -487,20 +493,23 @@ it("runs, duplicates, saves changed equipment, compares snapshots and opens a pr
   const count = screen.getByRole("spinbutton", { name: "모듈 수량" });
   await user.clear(count);
   await user.type(count, "500");
-  await user.click(
-    screen.getByRole("button", { name: "조건 저장", exact: true }),
-  );
+  await user.click(screen.getByRole("button", { name: /저장하고 분석/ }));
   await waitFor(() => expect(designs[1].equipment.module_count).toBe(500));
-  await user.click(
-    screen.getByRole("button", { name: "분석 실행", exact: true }),
-  );
   await waitFor(() => expect(runs.length).toBe(2));
-  await screen.findByText("분석 완료");
+  await screen.findByRole("heading", { name: "③ 설치용량 및 연간발전량" });
+  await goStep(user, /사업성 결과/);
+  await user.click(screen.getAllByRole("button", { name: "결과 저장 · 비교에 등록" })[0]);
+  expect((await screen.findAllByText("산정 불가")).length).toBeGreaterThan(0);
   await user.click(
     screen.getByRole("button", { name: "후보지 비교", exact: true }),
   );
   await screen.findByRole("heading", { name: "후보지·대안 비교" });
+  expect(screen.getByRole("heading", { name: "저장된 결과 2개" })).toBeTruthy();
   expect(screen.getAllByText("복제안").length).toBeGreaterThan(0);
+  // Search narrows the saved list; unchecking removes a run from the table.
+  await user.type(screen.getByRole("searchbox", { name: "저장된 결과 검색" }), "복제");
+  expect(screen.getAllByRole("checkbox").filter((c) => c.closest(".compare-list")).length).toBe(1);
+  await user.clear(screen.getByRole("searchbox", { name: "저장된 결과 검색" }));
   await user.click(
     screen.getByRole("button", { name: "검토 보고서", exact: true }),
   );
@@ -510,11 +519,4 @@ it("runs, duplicates, saves changed equipment, compares snapshots and opens a pr
   expect(within(report).getByRole("heading", { name: /가이드라인 6단계 요약/ })).toBeTruthy();
   expect(within(report).getByText(/15직렬 × 33병렬 = 500장/)).toBeTruthy();
   expect(within(report).getByText(/2025-01-01 ~ 2026-01-01/)).toBeTruthy();
-  expect(screen.getByRole("button", { name: "인쇄 · PDF 저장" })).toBeTruthy();
-  await user.click(
-    screen.getByRole("button", { name: "사업성 검토", exact: true }),
-  );
-  await user.click(screen.getByRole("tab", { name: "결과" }));
-  await user.click(screen.getByRole("tab", { name: /재무성/ }));
-  expect((await screen.findAllByText("산정 불가")).length).toBeGreaterThan(0);
 });

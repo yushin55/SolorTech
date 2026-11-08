@@ -2534,3 +2534,450 @@ details.step:not([open]) .step-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* ── 단계별 검토 마법사 ───────────────────────────── */
+.wizard {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.stepper {
+  list-style: none;
+  margin: 0;
+  padding: 18px 12px 14px;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  position: sticky;
+  top: 0;
+  z-index: 500;
+}
+.stepper li {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+/* connector line between circles */
+.stepper li + li::before {
+  content: "";
+  position: absolute;
+  top: 17px;
+  right: 50%;
+  width: 100%;
+  height: 2px;
+  background: var(--line);
+  z-index: 0;
+}
+.stepper li.done + li::before,
+.stepper li.done + li.active::before {
+  background: var(--primary);
+}
+.stepper button {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.stepper button:disabled {
+  cursor: not-allowed;
+}
+.stepper .dot {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 15px;
+  background: var(--surface);
+  border: 2px solid var(--line-strong);
+  color: var(--muted);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.stepper .label {
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.stepper li.open .dot {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.stepper li.done .dot {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.stepper li.active .dot {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  box-shadow: 0 0 0 5px var(--primary-weak);
+}
+.stepper li.active .label {
+  color: var(--text);
+  font-weight: 700;
+}
+.stepper li.locked .dot {
+  background: var(--subtle);
+  color: #9ca3af;
+}
+.stepper li:not(.locked) button:hover .dot {
+  border-color: var(--primary-hover);
+}
+.wizard-head h2 {
+  font-size: 20px;
+  margin-bottom: 4px;
+}
+.wizard-head p {
+  color: var(--muted);
+}
+.wizard-context {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--subtle);
+  font-size: 13px;
+  color: var(--text-2);
+}
+.wizard-nav {
+  position: sticky;
+  bottom: 0;
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.wizard-nav .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 1단계: 후보지 선택 */
+.site-step {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) 1fr;
+  gap: 16px;
+  align-items: start;
+}
+.site-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.site-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.site-card.picked {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 3px #fee2e2;
+}
+.site-card p {
+  color: var(--muted);
+  font-size: 14px;
+}
+.site-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.site-more summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+.weather-link {
+  margin: 0;
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--primary-weak);
+  font-size: 13px;
+}
+.weather-link div {
+  display: flex;
+  gap: 8px;
+}
+.weather-link dt {
+  flex: 0 0 72px;
+  color: var(--muted);
+}
+.weather-link dd {
+  margin: 0;
+  color: var(--text-2);
+}
+.site-map-card {
+  padding: 0;
+  overflow: hidden;
+}
+.site-map-wrap {
+  position: relative;
+}
+.site-map {
+  height: min(62vh, 560px);
+  min-height: 360px;
+}
+.site-legend {
+  position: absolute;
+  left: 10px;
+  bottom: 22px;
+  z-index: 400;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 0.92);
+  font-size: 12px;
+  color: var(--text-2);
+}
+.site-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.site-legend i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid #fff;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.15);
+}
+.site-legend i.pin {
+  background: #f97316;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+}
+.pick-pin span {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  background: #f97316;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.35);
+}
+.pick-pin.selected span {
+  background: var(--primary);
+  width: 26px;
+  height: 26px;
+  margin: -4px 0 0 -2px;
+}
+.pick-pin.picked span {
+  background: #ef4444;
+}
+.site-editor {
+  grid-column: 1 / -1;
+}
+
+/* 2단계: 설계 조건 */
+.design-step {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.design-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 10px;
+}
+.design-bar .field {
+  min-width: 260px;
+}
+.design-bar .hint {
+  flex-basis: 100%;
+}
+
+/* 6단계: 저장 */
+.save-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-color: var(--primary);
+  background: var(--primary-weak);
+}
+.save-card h3 {
+  margin-bottom: 4px;
+}
+.save-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* 후보지 비교: 체크박스 + 검색 */
+.compare-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  margin-bottom: 10px;
+}
+.search-box {
+  flex: 1 1 260px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--muted);
+}
+.search-box input {
+  flex: 1;
+  border: 0;
+  outline: 0;
+  padding: 9px 0;
+  background: transparent;
+  color: var(--text);
+}
+.search-box:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-weak);
+}
+.check-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--text-2);
+}
+.compare-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 360px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.compare-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  padding: 10px 12px;
+}
+.compare-list li + li {
+  border-top: 1px solid var(--line);
+}
+.compare-list li.on {
+  background: var(--primary-weak);
+}
+.compare-list label {
+  flex: 1 1 260px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  min-width: 0;
+}
+.compare-list label i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+}
+.compare-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.compare-name small {
+  color: var(--muted);
+}
+.compare-meta {
+  font-size: 13px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.link.muted {
+  color: var(--muted);
+}
+
+@media (max-width: 900px) {
+  .site-step {
+    grid-template-columns: 1fr;
+  }
+  .stepper {
+    padding: 12px 4px 10px;
+  }
+  .stepper .dot {
+    width: 30px;
+    height: 30px;
+    font-size: 13px;
+  }
+  .stepper li + li::before {
+    top: 14px;
+  }
+  .stepper .label {
+    font-size: 11px;
+  }
+}
+@media (max-width: 600px) {
+  .stepper .label {
+    display: none;
+  }
+  .stepper li.active .label {
+    display: block;
+    position: absolute;
+    top: 38px;
+  }
+  .stepper {
+    padding-bottom: 28px;
+  }
+}
+@media print {
+  .stepper,
+  .wizard-nav {
+    display: none;
+  }
+}
+.leaflet-div-icon.pick-pin {
+  background: none;
+  border: 0;
+}
+.compare-list input[type="checkbox"],
+.check-all input[type="checkbox"] {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--primary);
+}
+.check-all {
+  white-space: nowrap;
+}
+/* keep notices clear of the wizard's next button */
+.toast {
+  bottom: 96px;
+}

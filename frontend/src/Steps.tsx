@@ -221,7 +221,16 @@ export function MonthlyEnergyChart({ result }: { result: Result }) {
   );
 }
 
-export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: boolean }) {
+export function ReviewSteps({
+  run,
+  expandAll = false,
+  only,
+}: {
+  run: Run;
+  expandAll?: boolean;
+  /** Render just these guideline steps, expanded, in order (wizard pages). */
+  only?: string[];
+}) {
   const result = run.result!;
   const { site, equipment, costs, revenue, substitution } = result.steps;
   const e = result.economics;
@@ -602,6 +611,15 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
     ).props.children,
   ) as ReactElement<StepProps>[];
   const reference = result.reference ? <ReferenceBacktest reference={result.reference} /> : null;
+  if (only)
+    return (
+      <ExpandAll.Provider value>
+        <div className="stack">
+          {only.flatMap((id) => steps.filter((s) => s.props.id === id))}
+          {only.includes("energy") && reference}
+        </div>
+      </ExpandAll.Provider>
+    );
   if (expandAll)
     return (
       <ExpandAll.Provider value>

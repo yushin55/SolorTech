@@ -15,6 +15,7 @@ import {
   FileText,
   FileUp,
   GitCompareArrows,
+  Search,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -34,24 +35,26 @@ import type {
   Candidate,
   Catalog,
   Design,
+  Plant,
   Project,
   Run,
+  SiteType,
   WaterBody,
   Workspace,
 } from "./types";
+import Wizard from "./Wizard";
 import { hasGeometry } from "./types";
 import MapView from "./MapLoader";
-import { CandidateForm, DesignEditor } from "./Editors";
+import { CandidateForm } from "./Editors";
 import {
   candidateInputSignature,
   designInputSignature,
   gradeInfo,
   gradeOf,
 } from "./mapData";
-import type { Grade } from "./mapData";
 import Validation from "./Validation";
 import { ModelValidation, PlantRecords, WeatherValidation } from "./Records";
-import { GLOSSARY, ReviewSteps, Verdict } from "./Steps";
+import { GLOSSARY } from "./Steps";
 import ReportBody from "./Report";
 
 type Page = "review" | "data" | "weather" | "model" | "compare" | "validation" | "report";
@@ -70,7 +73,22 @@ const icons: Record<Page, LucideIcon> = {
   model: ChartLine,
   validation: FileUp,
 };
-type View = "result" | "map" | "design";
+const compareKey = (projectId: string) => `solar-compare-${projectId}`;
+function readRegistered(projectId: string): string[] | null {
+  try {
+    const raw = localStorage.getItem(compareKey(projectId));
+    return raw ? (JSON.parse(raw) as string[]) : null;
+  } catch {
+    return null;
+  }
+}
+function writeRegistered(projectId: string, ids: string[]) {
+  try {
+    localStorage.setItem(compareKey(projectId), JSON.stringify(ids));
+  } catch {
+    /* storage unavailable: the list lives for this visit only */
+  }
+}
 const pages: {
   id: Page;
   group: "검토" | "근거 데이터" | "도구";
@@ -83,18 +101,18 @@ const pages: {
     id: "review",
     group: "검토",
     label: "사업성 검토",
-    hint: "후보지별 6단계 산정",
+    hint: "단계별로 후보지 검토",
     title: "후보지 사업성 검토",
     description:
-      "K-water 표준설계모델 가이드라인 6단계로 설치용량·발전량·공사비·수익·재무성을 산정합니다.",
+      "후보지 선택부터 설계 조건, 발전량·공사비·수익, 사업성 결과까지 순서대로 진행합니다.",
   },
   {
     id: "compare",
     group: "검토",
     label: "후보지 비교",
-    hint: "대안을 나란히",
+    hint: "저장한 결과를 나란히",
     title: "후보지·대안 비교",
-    description: "같은 기준으로 발전량, B/C, 필요 판매단가와 발전량 감소 시 B/C를 비교합니다.",
+    description: "사업성 검토 6단계에서 저장한 결과를 골라 발전량, B/C, 필요 판매단가를 나란히 비교합니다.",
   },
   {
     id: "report",
@@ -146,49 +164,6 @@ const tooltipStyle = {
   border: "1px solid #e5e7eb",
   fontSize: 13,
 };
-function closeMenu(e: { currentTarget: Element }) {
-  const menu = e.currentTarget.closest("details");
-  if (menu) menu.open = false;
-}
-function GradeBadge({ grade }: { grade: Grade }) {
-  const info = gradeInfo[grade];
-  return (
-    <span
-      className="grade-badge"
-      title={info.rule}
-      style={{ color: info.color, background: info.soft }}
-    >
-      {info.label}
-    </span>
-  );
-}
-function Stat({
-  label,
-  value,
-  unit,
-  sub,
-  badge,
-}: {
-  label: string;
-  value: string;
-  unit?: string;
-  sub?: string;
-  badge?: ReactNode;
-}) {
-  return (
-    <div className="stat">
-      <span className="stat-label">
-        {label}
-        {badge}
-      </span>
-      <strong>
-        {value}
-        {unit && <small>{unit}</small>}
-      </strong>
-      <span className="stat-sub">{sub || "분석 후 표시됩니다"}</span>
-    </div>
-  );
-}
 function Card({
   title,
   aside,
@@ -302,7 +277,9 @@ export default function App() {
     [candidateId, setCandidateId] = useState(""),
     [designId, setDesignId] = useState(""),
     [page, setPage] = useState<Page>("review"),
-    [view, setView] = useState<View>("result"),
+    [step, setStep] = useState(1),
+    [registered, setRegistered] = useState<string[]>([]),
+    [compareQuery, setCompareQuery] = useState(""),
     [draft, setDraft] = useState<Design | null>(null),
     [activeRun, setActiveRun] = useState<Run | null>(null),
     [historyId, setHistoryId] = useState(""),
@@ -332,7 +309,12 @@ export default function App() {
         .filter(Boolean) || [],
     [workspace],
   );
-  const compareRuns = latestRuns.filter((r) => selected.includes(r.design_id));
+  const registeredLive = registered.filter((id) =>
+    workspace?.designs.some((d) => d.id === id),
+  );
+  const compareRuns = latestRuns.filter(
+    (r) => selected.includes(r.design_id) && registeredLive.includes(r.design_id),
+  );
   const history =
     workspace?.runs
       .filter((r) => r.design_id === designId)
@@ -388,8 +370,20 @@ export default function App() {
     setHistoryId("");
     setActiveRun(null);
     setLoading(true);
+    setStep(1);
     void refreshWorkspace(projectId)
-      .then((w) => setSelected(w.designs.slice(0, 3).map((d) => d.id)))
+      .then((w) => {
+        // First visit: register every design that already has a finished run.
+        const saved =
+          readRegistered(projectId) ??
+          w.designs
+            .filter((d) =>
+              w.runs.some((r) => r.design_id === d.id && r.status === "completed"),
+            )
+            .map((d) => d.id);
+        setRegistered(saved);
+        setSelected(saved);
+      })
       .catch(handleError)
       .finally(() => setLoading(false));
   }, [projectId, refreshWorkspace, handleError]);
@@ -741,6 +735,102 @@ export default function App() {
       handleError(e);
     }
   }
+  function selectCandidate(id: string) {
+    setCandidateId(id);
+    setDesignId(workspace?.designs.find((d) => d.candidate_id === id)?.id || "");
+    setHistoryId("");
+  }
+  /** K-water facility → candidate reproduced by its installed capacity. */
+  async function pickPlant(plant: Plant) {
+    const existing = workspace?.candidates.find((c) => c.reference_plant_id === plant.id);
+    if (existing) return selectCandidate(existing.id);
+    if (!catalog) return;
+    try {
+      const types: SiteType[] = ["floating", "plant", "basin", "land"];
+      const siteType = types.includes(plant.type as SiteType) ? (plant.type as SiteType) : "land";
+      const c = await mutate<Candidate>(`/projects/${projectId}/candidates`, "POST", {
+        name: plant.name,
+        latitude: plant.latitude,
+        longitude: plant.longitude,
+        geometry: null,
+        exclusions: [],
+        grid_point: null,
+        cable_distance_m: null,
+        water_depth_m: null,
+        water_level_m: null,
+        site_type: siteType,
+        reference_plant_id: plant.id,
+        source: `K-water 운영실적 · ${num(plant.capacity_kw, 1)} kWp · 좌표 ${plant.coordinate_basis}`.slice(0, 300),
+      });
+      const floating = siteType === "floating";
+      const land = catalog.modules.find((m) => m.id === "land_480");
+      const equipment = { ...catalog.defaults.equipment };
+      const costs = { ...catalog.defaults.costs };
+      if (!floating && land) {
+        Object.assign(equipment, {
+          module_preset: "land_480",
+          module_model: land.label,
+          module_power_w: land.module_power_w,
+          module_width_m: land.module_width_m,
+          module_height_m: land.module_height_m,
+          module_price: land.module_price,
+        });
+        Object.assign(costs, { float_per_kw: 0, mooring_per_kw: 0 });
+      }
+      equipment.capacity_mode = "count";
+      equipment.module_count = Math.max(
+        1,
+        Math.round((plant.capacity_kw * 1000) / Number(equipment.module_power_w || 450)),
+      );
+      const d = await mutate<Design>(`/projects/${projectId}/designs`, "POST", {
+        ...catalog.defaults,
+        equipment,
+        costs,
+        name: `기존 설비 ${num(plant.capacity_kw, 0)} kWp 재현`,
+        candidate_id: c.id,
+      });
+      await refreshWorkspace(projectId);
+      setCandidateId(c.id);
+      setDesignId(d.id);
+      setHistoryId("");
+      setNotice(`${plant.name}을(를) 후보지로 추가했습니다. ‘다음’으로 설계 조건을 확인하세요.`);
+    } catch (e) {
+      handleError(e);
+    }
+  }
+  /** Map click → new candidate at that point (boundary can be drawn later). */
+  function createAtPoint(point: { latitude: number; longitude: number }, name: string) {
+    setModal({
+      kind: "candidate",
+      isNew: true,
+      candidate: {
+        id: "",
+        project_id: projectId,
+        name,
+        latitude: point.latitude,
+        longitude: point.longitude,
+        geometry: null,
+        exclusions: [],
+        grid_point: null,
+        cable_distance_m: null,
+        water_depth_m: null,
+        water_level_m: null,
+        site_type: "floating",
+        reference_plant_id: null,
+        source: "지도에서 지정한 위치 (경계 없음 · 모듈 수량 기준)",
+      },
+    });
+  }
+  function setRegisteredList(ids: string[]) {
+    setRegistered(ids);
+    writeRegistered(projectId, ids);
+  }
+  function registerDesign() {
+    if (!designId) return;
+    if (!registeredLive.includes(designId)) setRegisteredList([...registeredLive, designId]);
+    setSelected((s) => (s.includes(designId) ? s : [...s, designId]));
+    setNotice("결과를 저장했습니다. ‘후보지 비교’에서 다른 후보와 비교할 수 있습니다.");
+  }
   const currentPending = history.some(
     (r) => r.status === "running" || r.status === "pending",
   );
@@ -754,7 +844,7 @@ export default function App() {
         b.created_at.localeCompare(a.created_at),
       )[0]
     : null;
-  const showRun = page === "review" || page === "report";
+  const showRun = page === "report";
   const mappable = workspace?.candidates.filter(hasGeometry) || [];
   return (
     <div className="app">
@@ -920,358 +1010,199 @@ export default function App() {
         ) : (
           <>
             {page === "review" && (
-              <>
-                <div className="workbar">
-                  <label>
-                    <span>후보지</span>
-                    <select
-                      aria-label="후보지 선택"
-                      value={candidateId}
-                      onChange={(e) => {
-                        const id = e.target.value;
-                        setCandidateId(id);
-                        setDesignId(workspace.designs.find((d) => d.candidate_id === id)?.id || "");
-                        setHistoryId("");
-                      }}
-                    >
-                      {workspace.candidates.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                      {!workspace.candidates.length && <option value="">후보지 없음</option>}
-                    </select>
-                  </label>
-                  <label>
-                    <span>설계 대안</span>
-                    <select
-                      aria-label="설계 대안 선택"
-                      value={designId}
-                      onChange={(e) => setDesignId(e.target.value)}
-                    >
-                      {workspace.designs
-                        .filter((d) => d.candidate_id === candidateId)
-                        .map((d) => (
-                          <option key={d.id} value={d.id}>
-                            {d.name}
-                          </option>
-                        ))}
-                    </select>
-                  </label>
-                  <details className="dropdown">
-                    <summary className="btn ghost">관리</summary>
-                    <div className="menu-list">
-                      <span className="menu-label">후보지</span>
-                      <button onClick={(e) => { closeMenu(e); newCandidate(); }}>새 후보지 추가</button>
-                      {candidate && (
-                        <>
-                          <button onClick={(e) => { closeMenu(e); setModal({ kind: "candidate", candidate }); }}>
-                            이름·좌표·수심 수정
-                          </button>
-                          {candidate.geometry && (
-                            <button onClick={(e) => { closeMenu(e); exportGeo(); }}>GeoJSON 내보내기</button>
-                          )}
-                          <label>
-                            GeoJSON 가져오기
-                            <input
-                              type="file"
-                              accept=".geojson,.json"
-                              onChange={(e) => {
-                                const f = e.target.files?.[0];
-                                closeMenu(e);
-                                if (f) void importGeo(f);
-                                e.target.value = "";
-                              }}
-                            />
-                          </label>
-                          {candidate.exclusions.length > 0 && (
-                            <button onClick={(e) => { closeMenu(e); void updateCandidate({ exclusions: [] }); }}>
-                              제외 구역 모두 지우기
-                            </button>
-                          )}
-                          <button className="danger" onClick={(e) => { closeMenu(e); void remove("candidate", candidate.id); }}>
-                            후보지 삭제
-                          </button>
-                        </>
-                      )}
-                      <span className="menu-label">설계 대안</span>
-                      <button disabled={!candidate} onClick={(e) => { closeMenu(e); void addDesign(); }}>
-                        새 대안 추가
-                      </button>
-                      {design && (
-                        <>
-                          <button onClick={(e) => { closeMenu(e); void duplicateDesign(); }}>대안 복제</button>
-                          <button className="danger" onClick={(e) => { closeMenu(e); void remove("design", design.id); }}>
-                            대안 삭제
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </details>
-                  <div className="context-right">
-                    {history.length > 1 && (
-                      <select
-                        aria-label="분석 이력"
-                        value={chosenRunId}
-                        onChange={(e) => setHistoryId(e.target.value)}
-                      >
-                        {history.map((r) => (
-                          <option key={r.id} value={r.id}>
-                            {date(r.created_at)} ·{" "}
-                            {r.status === "completed" ? "완료" : r.status === "failed" ? "실패" : "계산 중"}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                    <span
-                      className={
-                        "status " +
-                        (currentPending ? "pending" : activeRun?.status === "completed" ? "done" : "")
-                      }
-                    >
-                      {currentPending ? "계산 중" : activeRun?.status === "completed" ? "분석 완료" : "분석 전"}
-                    </span>
-                  </div>
-                </div>
-                {activeRun?.status === "failed" && (
-                  <div className="banner error">
-                    <span>분석 실패: {activeRun.error}</span>
-                    <button onClick={() => void analyze()}>다시 분석</button>
-                  </div>
-                )}
-                {stale && (
-                  <div className="banner warning">
-                    <span>
-                      현재 조건이 분석 시점과 다릅니다. 아래 결과는 이전 조건으로
-                      계산한 값입니다.
-                    </span>
-                    <button onClick={() => void analyze()}>다시 분석</button>
-                  </div>
-                )}
-                {result && !stale && <Verdict result={result} />}
-                <div className="stats">
-                  <Stat
-                    label="DC 설비용량"
-                    value={result ? num(result.capacity_dc_kw, 1) : "—"}
-                    unit="kW"
-                    sub={result ? `AC ${num(result.capacity_ac_kw)} kW` : undefined}
-                  />
-                  <Stat
-                    label="연간 발전량"
-                    value={result ? num(result.annual_kwh / 1000, 1) : "—"}
-                    unit="MWh"
-                    sub={
-                      result
-                        ? result.calibration && result.energy_basis === "calibrated"
-                          ? `범위 ${num(result.calibration.annual_p10_kwh / 1000, 0)}–${num(result.calibration.annual_p90_kwh / 1000, 0)}`
-                          : "물리 모델 단독"
-                        : undefined
-                    }
-                  />
-                  <Stat
-                    label="편익·비용비 (B/C)"
-                    badge={result && <GradeBadge grade={gradeOf(result)} />}
-                    value={result ? num(result.economics.bc, 2) : "—"}
-                    sub={result ? `총 공사비 ${num(result.economics.capex / 100000000, 1)}억 원` : undefined}
-                  />
-                  <Stat
-                    label="필요 판매단가"
-                    value={result ? num(result.economics.required_price_per_kwh, 1) : "—"}
-                    unit="원/kWh"
-                    sub={result ? `가정 단가 ${num(result.economics.effective_price_per_kwh, 0)}원` : undefined}
-                  />
-                </div>
-                <div className="segmented" role="tablist" aria-label="검토 화면">
-                  {(
-                    [
-                      ["result", "결과"],
-                      ["map", "지도·배치"],
-                      ["design", "설계 조건"],
-                    ] as const
-                  ).map(([key, label]) => (
-                    <button
-                      key={key}
-                      role="tab"
-                      aria-selected={view === key}
-                      className={view === key ? "active" : ""}
-                      onClick={() => setView(key)}
-                    >
-                      {label}
-                      {key === "design" && dirty && <i className="dot" aria-hidden="true" title="저장 안 됨" />}
-                    </button>
-                  ))}
-                </div>
-                {view === "result" &&
-                  (activeRun?.result ? (
-                    <ReviewSteps run={activeRun} />
-                  ) : (
-                    <div className="card empty">
-                      <h3>아직 분석 결과가 없습니다</h3>
-                      <p>‘설계 조건’을 확인한 뒤 오른쪽 위 ‘분석 실행’을 누르세요.</p>
-                      <button className="btn" onClick={() => setView("design")}>
-                        설계 조건 보기
-                      </button>
-                    </div>
-                  ))}
-                {view === "map" && (
-                  <Card title="수면 후보지" className="map-card">
-                    {!candidate || candidate.geometry ? (
+              <Wizard
+                step={step}
+                setStep={setStep}
+                workspace={workspace}
+                candidate={candidate}
+                design={design}
+                draft={draft}
+                setDraft={setDraft}
+                dirty={dirty}
+                saving={saving}
+                running={running}
+                pending={currentPending}
+                activeRun={activeRun}
+                stale={stale}
+                registered={registeredLive.includes(designId)}
+                onSelectCandidate={selectCandidate}
+                onSelectDesign={setDesignId}
+                onPickPlant={pickPlant}
+                onCreateAtPoint={createAtPoint}
+                onEditCandidate={() => candidate && setModal({ kind: "candidate", candidate })}
+                onAddDesign={() => void addDesign()}
+                onDuplicateDesign={() => void duplicateDesign()}
+                onSaveDesign={() => void saveDesign()}
+                onAnalyze={() => analyze()}
+                onRegister={registerDesign}
+                onOpenCompare={() => setPage("compare")}
+                onOpenReport={() => setPage("report")}
+                onDeleteCandidate={() => candidate && void remove("candidate", candidate.id)}
+                onDeleteDesign={() => design && void remove("design", design.id)}
+                onExportGeo={exportGeo}
+                onImportGeo={(f) => void importGeo(f)}
+                mapEditor={
+                  candidate && hasGeometry(candidate) ? (
+                    <Card title="경계·배치 편집" className="map-card">
                       <Suspense fallback={<div className="map-loading">지도를 불러오는 중…</div>}>
                         <MapView
-                          candidate={candidate && hasGeometry(candidate) ? candidate : null}
+                          candidate={candidate}
                           result={stale ? null : result}
                           candidates={mappable}
                           designs={mapDesigns}
                           runs={workspace.runs}
                           selectedDesignId={designId}
-                          onSelectCandidate={(id) => {
-                            if (id === candidateId) return;
-                            setCandidateId(id);
-                            setDesignId(workspace.designs.find((d) => d.candidate_id === id)?.id || "");
-                            setHistoryId("");
-                          }}
+                          onSelectCandidate={selectCandidate}
                           onAddCandidate={newCandidate}
-                          onUpdate={candidate ? updateCandidate : async () => {}}
-                          onAnalyzeAll={() => void analyze(true)}
+                          onUpdate={updateCandidate}
                           onAddWater={newCandidateFromWater}
                         />
                       </Suspense>
-                    ) : (
-                      <div className="reference-site">
-                        <strong>경계 없는 실적 재현 후보지</strong>
-                        <p>
-                          {candidate.source} · 위도 {num(candidate.latitude, 4)}, 경도{" "}
-                          {num(candidate.longitude, 4)}
-                        </p>
-                        <p className="hint">
-                          기존 발전소를 설비용량으로 재현해 예측과 실적을 비교합니다. 면적·배치 검토는 생략합니다.
-                        </p>
-                      </div>
-                    )}
-                    {candidate && (
-                      <dl className="facts">
-                        <div>
-                          <dt>배치 모듈</dt>
-                          <dd>
-                            {num(result?.layout?.module_count)} / {num(result?.layout?.requested_count)}장
-                          </dd>
-                        </div>
-                        <div>
-                          <dt>한전 연계거리</dt>
-                          <dd>
-                            {candidate.cable_distance_m != null
-                              ? `${num(candidate.cable_distance_m)} m`
-                              : candidate.grid_point
-                                ? "연결점 직선거리"
-                                : "미입력"}
-                          </dd>
-                        </div>
-                        <div>
-                          <dt>제외 구역</dt>
-                          <dd>{candidate.exclusions.length}곳</dd>
-                        </div>
-                      </dl>
-                    )}
-                    <p className="hint">
-                      지역을 검색한 뒤 ‘이 지역 수면 찾기’로 저수지·호수를 찾아 클릭하면 후보지로 추가됩니다.
-                    </p>
-                  </Card>
-                )}
-                {view === "design" &&
-                  (draft ? (
-                    <DesignEditor
-                      design={draft}
-                      onChange={setDraft}
-                      onSave={() => void saveDesign()}
-                      dirty={dirty}
-                      saving={saving}
-                    />
-                  ) : (
-                    <div className="card empty">
-                      <h3>설계 대안이 없습니다</h3>
-                      <button className="btn primary" disabled={!candidate} onClick={() => void addDesign()}>
-                        대안 추가
-                      </button>
-                    </div>
-                  ))}
-              </>
+                      <p className="hint">
+                        경계 그리기·제외 구역·연결점을 지정하면 설치 가능 면적과 배치가 반영됩니다.
+                      </p>
+                    </Card>
+                  ) : null
+                }
+              />
             )}
             {page === "data" && <PlantRecords onError={handleError} />}
             {page === "model" && <ModelValidation onError={handleError} />}
             {page === "weather" && <WeatherValidation onError={handleError} />}
-            {page === "compare" && (
-              <div className="stack">
-                <Card
-                  title="비교할 대안"
-                  aside={
-                    <button
-                      className="btn primary"
-                      disabled={
-                        !workspace.designs.length ||
-                        running ||
-                        workspace.runs.some((r) => r.status === "running")
-                      }
-                      onClick={() => void analyze(true)}
-                    >
-                      전체 대안 분석
-                    </button>
-                  }
-                >
-                  <div className="chips">
-                    {workspace.designs.map((d, i) => (
-                      <label
-                        key={d.id}
-                        className={selected.includes(d.id) ? "on" : ""}
+            {page === "compare" && (() => {
+              const q = compareQuery.trim().toLowerCase();
+              const items = registeredLive
+                .map((id) => workspace.designs.find((d) => d.id === id)!)
+                .map((d) => ({
+                  d,
+                  c: workspace.candidates.find((c) => c.id === d.candidate_id),
+                  run: latestRuns.find((r) => r.design_id === d.id),
+                }))
+                .filter(
+                  ({ d, c }) =>
+                    !q || d.name.toLowerCase().includes(q) || (c?.name || "").toLowerCase().includes(q),
+                );
+              const visibleIds = items.map((i) => i.d.id);
+              const allOn = visibleIds.length > 0 && visibleIds.every((id) => selected.includes(id));
+              return (
+                <div className="stack">
+                  <Card
+                    title={`저장된 결과 ${registeredLive.length}개`}
+                    aside={
+                      <button className="btn" onClick={() => { setPage("review"); setStep(1); }}>
+                        새 후보지 검토
+                      </button>
+                    }
+                  >
+                    {registeredLive.length === 0 ? (
+                      <p className="hint">
+                        아직 저장한 결과가 없습니다. ‘사업성 검토’ 6단계에서 ‘결과 저장 · 비교에 등록’을 누르면 여기에 추가됩니다.
+                      </p>
+                    ) : (
+                      <>
+                        <div className="compare-tools">
+                          <label className="search-box">
+                            <Search size={16} aria-hidden="true" />
+                            <input
+                              type="search"
+                              placeholder="후보지·대안 이름 검색"
+                              aria-label="저장된 결과 검색"
+                              value={compareQuery}
+                              onChange={(e) => setCompareQuery(e.target.value)}
+                            />
+                          </label>
+                          <label className="check-all">
+                            <input
+                              type="checkbox"
+                              checked={allOn}
+                              onChange={(e) =>
+                                setSelected((s) =>
+                                  e.target.checked
+                                    ? [...new Set([...s, ...visibleIds])]
+                                    : s.filter((id) => !visibleIds.includes(id)),
+                                )
+                              }
+                            />
+                            {q ? "검색 결과 전체 선택" : "전체 선택"}
+                          </label>
+                        </div>
+                        <ul className="compare-list">
+                          {items.map(({ d, c, run }) => {
+                            const on = selected.includes(d.id);
+                            const color = colors[compareRuns.findIndex((r) => r.design_id === d.id) % colors.length];
+                            return (
+                              <li key={d.id} className={on ? "on" : ""}>
+                                <label>
+                                  <input
+                                    type="checkbox"
+                                    checked={on}
+                                    onChange={(e) =>
+                                      setSelected((s) =>
+                                        e.target.checked ? [...s, d.id] : s.filter((v) => v !== d.id),
+                                      )
+                                    }
+                                  />
+                                  {on && run && <i style={{ background: color }} />}
+                                  <span className="compare-name">
+                                    <b>{c?.name || "후보지"}</b>
+                                    <small>{d.name}</small>
+                                  </span>
+                                </label>
+                                <span className="compare-meta">
+                                  {run?.result
+                                    ? `${num(run.result.annual_kwh / 1000, 0)} MWh · B/C ${num(run.result.economics.bc, 2)} · ${date(run.created_at)}`
+                                    : "분석 결과 없음"}
+                                </span>
+                                <button
+                                  className="link"
+                                  onClick={() => {
+                                    setCandidateId(d.candidate_id);
+                                    setDesignId(d.id);
+                                    setHistoryId("");
+                                    setPage("review");
+                                    setStep(6);
+                                  }}
+                                >
+                                  열기
+                                </button>
+                                <button
+                                  className="link muted"
+                                  onClick={() => setRegisteredList(registeredLive.filter((v) => v !== d.id))}
+                                >
+                                  목록에서 빼기
+                                </button>
+                              </li>
+                            );
+                          })}
+                          {items.length === 0 && <li className="hint">검색 결과가 없습니다.</li>}
+                        </ul>
+                      </>
+                    )}
+                  </Card>
+                  {compareRuns.length > 0 ? (
+                    <>
+                      <Card
+                        title="월별 발전량"
+                        aside={<span className="muted">단위 MWh · 각 대안의 사업성 기준 발전량</span>}
                       >
-                        <input
-                          type="checkbox"
-                          checked={selected.includes(d.id)}
-                          onChange={(e) =>
-                            setSelected((s) =>
-                              e.target.checked
-                                ? [...s, d.id]
-                                : s.filter((v) => v !== d.id),
-                            )
-                          }
-                        />
-                        <i style={{ background: colors[i % colors.length] }} />
-                        {d.name}
-                        <small>
-                          {
-                            workspace.candidates.find(
-                              (c) => c.id === d.candidate_id,
-                            )?.name
-                          }
-                        </small>
-                      </label>
-                    ))}
-                  </div>
-                  <p className="hint">
-                    분석이 끝난 대안의 최신 결과를 비교합니다.
-                  </p>
-                </Card>
-                {compareRuns.length > 0 ? (
-                  <>
-                    <Card
-                      title="월별 발전량"
-                      aside={<span className="muted">단위 MWh · 각 대안의 사업성 기준 발전량</span>}
-                    >
-                      <Monthly runs={compareRuns} comparison />
-                    </Card>
-                    <Comparison runs={compareRuns} />
-                    <p className="hint">
-                      총발전량과 용량당 발전량을 함께 보세요. 비용·판매·위치
-                      가정이 다르면 결과도 달라지므로 순위를 매기지 않습니다.
-                    </p>
-                  </>
-                ) : (
-                  <div className="card empty">
-                    <h3>비교할 결과가 없습니다</h3>
-                    <p>대안을 2개 이상 고르고 ‘전체 대안 분석’을 누르세요.</p>
-                  </div>
-                )}
-              </div>
-            )}
+                        <Monthly runs={compareRuns} comparison />
+                      </Card>
+                      <Comparison runs={compareRuns} />
+                      <p className="hint">
+                        총발전량과 용량당 발전량을 함께 보세요. 비용·판매·위치 가정이 다르면 결과도 달라지므로 순위를 매기지 않습니다.
+                      </p>
+                    </>
+                  ) : (
+                    registeredLive.length > 0 && (
+                      <div className="card empty">
+                        <h3>비교할 결과를 고르세요</h3>
+                        <p>위 목록에서 체크한 결과가 나란히 표시됩니다.</p>
+                      </div>
+                    )
+                  )}
+                </div>
+              );
+            })()}
             {page === "validation" && (
               <Validation
                 key={projectId}
@@ -1378,7 +1309,12 @@ export default function App() {
               <div className="help">
                 <ol>
                   <li>
-                    지역으로 이동한 뒤 <b>이 지역 수면 찾기</b>를 누르고, 파란
+                    <b>사업성 검토</b>는 위쪽 동그라미 6단계로 진행합니다. 1단계에서 K-water 시설을 고르거나 지도를 클릭해 후보지를 정하고,
+                    2단계에서 설계 조건을 입력한 뒤 <b>저장하고 분석</b>을 누릅니다. 3~5단계에서 발전량·공사비·수익을,
+                    6단계에서 사업성을 확인하고 <b>결과 저장 · 비교에 등록</b>을 누르면 <b>후보지 비교</b>에 추가됩니다.
+                  </li>
+                  <li>
+                    경계가 있는 후보지는 1단계 <b>경계·배치 편집</b>에서 지역을 검색한 뒤 <b>이 지역 수면 찾기</b>를 누르고, 파란
                     저수지·호수를 클릭해 <b>후보지로 추가</b>합니다. 실제 수면
                     경계와 섬이 그대로 들어갑니다.
                   </li>
