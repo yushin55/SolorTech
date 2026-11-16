@@ -5,6 +5,8 @@ import type { Candidate, Plant, WeatherStation } from "./types";
 import { num } from "./api";
 
 type Point = { latitude: number; longitude: number };
+
+const coordText = (p: Point) => `위도 ${num(p.latitude, 5)} · 경도 ${num(p.longitude, 5)}`;
 type Props = {
   plants: Plant[];
   candidates: Candidate[];
@@ -86,7 +88,7 @@ export default function SiteMap({
         keyboard: false,
       });
       marker.bindTooltip(
-        `<b>기상청 ${st.name} 관측소 (${st.stn})</b><br>ASOS · 해발 ${num(st.elevation_m, 0)} m` +
+        `<b>기상청 ${st.name} 관측소 (${st.stn})</b><br>ASOS · 해발 ${num(st.elevation_m, 0)} m<br>${coordText(st)}` +
           (near && nearestStation?.distance_km != null
             ? `<br>선택 위치에서 ${num(nearestStation.distance_km, 1)} km (가장 가까움)`
             : ""),
@@ -113,7 +115,8 @@ export default function SiteMap({
       });
       marker.bindTooltip(
         `<b>${p.name}</b><br>${p.type_label} · ${num(p.capacity_kw, 0)} kW` +
-          (p.specific_yield ? `<br>실적 ${num(p.specific_yield, 0)} kWh/kWp·년` : ""),
+          (p.specific_yield ? `<br>실적 ${num(p.specific_yield, 0)} kWh/kWp·년` : "") +
+          `<br>${coordText(p)}`,
         { direction: "top", offset: [0, -6] },
       );
       marker.on("click", (e) => {
@@ -133,7 +136,7 @@ export default function SiteMap({
         }),
         zIndexOffset: selected ? 1000 : 500,
       });
-      marker.bindTooltip(`<b>${c.name}</b><br>저장된 후보지`, { direction: "top", offset: [0, -20] });
+      marker.bindTooltip(`<b>${c.name}</b><br>저장된 후보지<br>${coordText(c)}`, { direction: "top", offset: [0, -20] });
       marker.on("click", (e) => {
         L.DomEvent.stopPropagation(e);
         handlers.current.onCandidate(c.id);
@@ -162,6 +165,11 @@ export default function SiteMap({
   return (
     <div className="site-map-wrap">
       <div ref={box} className="site-map" />
+      {focus && (
+        <div className="map-coords" aria-label="선택 위치 좌표">
+          {coordText(focus)}
+        </div>
+      )}
       <div className="site-legend">
         <span><i style={{ background: PLANT_COLOR.floating }} />K-water 수상</span>
         <span><i style={{ background: PLANT_COLOR.plant }} />정수장</span>
