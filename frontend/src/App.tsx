@@ -921,7 +921,7 @@ export default function App() {
             setPage("review");
           }}
         >
-          <img src="/kwater-logo.png" alt="K-water 한국수자원공사" width="200" height="35" />
+          <img src="/solartech-logo.png" alt="SolarTech" width="200" height="40" />
           <small>태양광 입지·사업성 분석 플랫폼</small>
         </a>
         <nav className="nav" aria-label="화면">
