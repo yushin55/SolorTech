@@ -113,6 +113,12 @@ def migrate_v2(repo):
     repo.put("meta", {"id": "schema_v2", "created_at": now()})
 
 
+def with_defaults(design):
+    """Fill input fields added after a design was saved (e.g. PF 융자) with today's defaults for display."""
+    base = defaults()
+    return {**design, **{group: {**base[group], **(design.get(group) or {})} for group in ("equipment", "costs", "finance")}}
+
+
 def touch(repo, project_id):
     project = repo.get("projects", project_id)
     if project:
@@ -560,7 +566,7 @@ def create_app(repository=None, seed=None):
             runs.append(summary)
         return {"project": project_summary(repo, project),
                 "candidates": [readable("candidates", item) for item in repo.list("candidates") if item["project_id"] == identifier],
-                "designs": [readable("designs", item) for item in repo.list("designs") if item["project_id"] == identifier], "runs": runs}
+                "designs": [with_defaults(readable("designs", item)) for item in repo.list("designs") if item["project_id"] == identifier], "runs": runs}
 
     @app.post("/api/projects/{identifier}/candidates", status_code=201)
     def create_candidate(identifier: str, payload: CandidateCreate, request: Request):

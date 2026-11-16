@@ -276,7 +276,7 @@ export function estimateAngle(rows: AngleRow[], tilt: number, azimuth: number) {
   return { ratio: mix("ratio"), annual_kwh: mix("annual_kwh") };
 }
 
-type Tab = "angles" | "equipment" | "costs" | "finance";
+export type Tab = "angles" | "equipment" | "costs" | "finance";
 type Modules = Catalog["modules"];
 export type DesignContext = {
   candidate?: Candidate | null;
@@ -565,6 +565,9 @@ export function DesignEditor({
   dirty,
   saving,
   context = {},
+  tabs = ["equipment", "angles", "costs", "finance"],
+  title = "설계 조건",
+  saveLabel = "조건 저장",
 }: {
   design: Design;
   onChange: (d: Design) => void;
@@ -572,8 +575,13 @@ export function DesignEditor({
   dirty: boolean;
   saving: boolean;
   context?: DesignContext;
+  /** 이 화면에서 보여줄 입력 탭 (위저드 단계별로 나눠 씀). */
+  tabs?: Tab[];
+  title?: string;
+  saveLabel?: string;
 }) {
-  const [tab, setTab] = useState<Tab>("equipment");
+  const [picked, setTab] = useState<Tab>(tabs[0]);
+  const tab = tabs.includes(picked) ? picked : tabs[0];
   const eq = design.equipment;
   const siteType = context.candidate?.site_type ?? "floating";
   const moduleSpec = context.modules?.find((m) => m.id === eq.module_preset);
@@ -598,9 +606,10 @@ export function DesignEditor({
   return (
     <aside className="card inspector">
       <div className="card-heading">
-        <h3>설계 조건</h3>
+        <h3>{title}</h3>
         <span className={"save-state " + (dirty ? "dirty" : "")}>{dirty ? "저장 안 됨" : "저장됨"}</span>
       </div>
+      {tabs.length > 1 && (
       <div className="tabs" role="tablist">
         {(
           [
@@ -609,12 +618,13 @@ export function DesignEditor({
             ["costs", "④ 공사비"],
             ["finance", "⑤⑥ 수익·재무"],
           ] as const
-        ).map(([k, l]) => (
+        ).filter(([k]) => tabs.includes(k)).map(([k, l]) => (
           <button role="tab" aria-selected={tab === k} className={tab === k ? "active" : ""} key={k} onClick={() => setTab(k)}>
             {l}
           </button>
         ))}
       </div>
+      )}
       <div className="inspector-body">
         <label className="field">
           <span>대안 이름</span>
@@ -738,7 +748,7 @@ export function DesignEditor({
       </div>
       <div className="inspector-footer">
         <button className={"btn block " + (dirty ? "primary" : "")} disabled={saving || !dirty} onClick={onSave}>
-          {saving ? "저장 중…" : dirty ? "조건 저장" : "저장된 상태입니다"}
+          {saving ? "저장 중…" : dirty ? saveLabel : "저장된 상태입니다"}
         </button>
       </div>
     </aside>

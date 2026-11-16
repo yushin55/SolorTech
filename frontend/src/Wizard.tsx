@@ -5,6 +5,7 @@ import { api, num } from "./api";
 import type { Candidate, Catalog, Design, Plant, PlantList, Run, SiteInfo, SiteType, WeatherStation, Workspace } from "./types";
 import { SITE_TYPE_OPTIONS, siteTypeLabel } from "./types";
 import { DesignEditor } from "./Editors";
+import type { Tab } from "./Editors";
 import {
   AngleComparison,
   AssumptionTable,
@@ -21,10 +22,10 @@ const SiteMap = lazy(() => import("./SiteMap"));
 
 export const WIZARD_STEPS = [
   { no: 1, label: "후보지 선택", title: "1단계 · 후보지 선택", lead: "지도에서 위치를 클릭하거나 K-water 보유 시설을 고르세요. 고른 좌표의 30년 기상자료가 발전량 계산에 자동으로 연결됩니다." },
-  { no: 2, label: "설계 조건", title: "2단계 · 설계 조건 입력", lead: "구조물·모듈·용량, 공사비 단가, 판매·재무 조건을 입력합니다. ‘다음’을 누르면 저장하고 분석을 시작합니다." },
+  { no: 2, label: "설계 조건", title: "2단계 · 설계 조건 입력", lead: "모듈·설비 용량과 패널 각도·방향을 입력합니다. ‘다음’을 누르면 저장하고 분석을 시작합니다." },
   { no: 3, label: "발전량 예측", title: "3단계 · 설치용량과 발전량 예측", lead: "설치대상지 조건과 설치용량, 운영실적으로 보정한 월별 발전량과 오차 범위입니다." },
-  { no: 4, label: "공사비", title: "4단계 · 개략공사비", lead: "모듈·인버터(가이드라인 단가)와 부유체·계류·전기·토목(견적 가정)으로 산정한 초기 투자비입니다." },
-  { no: 5, label: "예상 수익", title: "5단계 · 예상수익", lead: "판매 방식과 단가, 출력제한을 반영한 연간 매출과 판매전력량입니다." },
+  { no: 4, label: "공사비", title: "4단계 · 개략공사비", lead: "공사비 단가를 입력하고, 모듈·인버터(가이드라인 단가)와 부유체·계류·전기·토목(견적 가정)으로 산정한 초기 투자비를 확인합니다." },
+  { no: 5, label: "예상 수익", title: "5단계 · 예상수익", lead: "판매 방식·단가와 재무 조건을 입력하고, 출력제한을 반영한 연간 매출과 판매단가 시나리오별 결과를 확인합니다." },
   { no: 6, label: "사업성 결과", title: "6단계 · 사업성 분석 결과", lead: "B/C·NPV·필요 판매단가로 사업성을 판단하고, 결과를 저장해 후보지 비교에 등록합니다." },
 ] as const;
 
@@ -79,10 +80,9 @@ export default function Wizard(p: WizardProps) {
   const analysisStep = p.step >= 3;
 
   async function next() {
-    if (p.step === 2) {
-      // Save and (re)run when conditions changed or nothing is computed yet.
-      if (p.dirty || !result || p.stale) await p.onAnalyze();
-    }
+    // Save and (re)run when conditions changed or nothing is computed yet.
+    if (p.step === 2 && (p.dirty || !result || p.stale)) await p.onAnalyze();
+    else if ((p.step === 4 || p.step === 5) && p.dirty) await p.onAnalyze();
     p.setStep(Math.min(6, p.step + 1));
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -136,6 +136,8 @@ export default function Wizard(p: WizardProps) {
       <div className="wizard-body">
         {p.step === 1 && <SiteStep {...p} />}
         {p.step === 2 && <DesignStep {...p} />}
+        {p.step === 4 && <StepInputs {...p} tab="costs" title="공사비 단가 입력" />}
+        {p.step === 5 && <StepInputs {...p} tab="finance" title="판매·재무 조건 입력" />}
         {analysisStep &&
           (p.pending || p.running ? (
             <div className="card empty">
@@ -183,7 +185,9 @@ export default function Wizard(p: WizardProps) {
             }
             onClick={() => void next()}
           >
-            {p.step === 2 && (p.dirty || !result || p.stale) ? "저장하고 분석" : "다음"}
+            {(p.step === 2 && (p.dirty || !result || p.stale)) || ((p.step === 4 || p.step === 5) && p.dirty)
+              ? "저장하고 분석"
+              : "다음"}
             <ChevronRight size={16} aria-hidden="true" />
           </button>
         ) : (
@@ -563,6 +567,7 @@ function DesignStep(p: WizardProps) {
           onSave={p.onSaveDesign}
           dirty={p.dirty}
           saving={p.saving}
+          tabs={["equipment", "angles"]}
           context={{
             candidate: p.candidate,
             modules: p.catalog?.modules ?? [],
@@ -581,6 +586,29 @@ function DesignStep(p: WizardProps) {
         </div>
       )}
     </div>
+  );
+}
+
+/** 4단계 공사비·5단계 수익·재무 입력: 같은 설계안의 해당 탭만 보여 주고, 저장하면 바로 다시 분석한다. */
+function StepInputs(p: WizardProps & { tab: Tab; title: string }) {
+  if (!p.draft) return null;
+  return (
+    <DesignEditor
+      design={p.draft}
+      onChange={p.setDraft}
+      onSave={() => void p.onAnalyze()}
+      dirty={p.dirty}
+      saving={p.saving || p.running}
+      tabs={[p.tab]}
+      title={p.title}
+      saveLabel="저장하고 다시 분석"
+      context={{
+        candidate: p.candidate,
+        modules: p.catalog?.modules ?? [],
+        inverters: p.catalog?.inverters ?? [],
+        requiredPrice: p.activeRun?.result?.economics.required_price_per_kwh ?? null,
+      }}
+    />
   );
 }
 
