@@ -922,7 +922,7 @@ export default function App() {
           }}
         >
           <img src="/kwater-logo.png" alt="K-water 한국수자원공사" width="200" height="35" />
-          <small>수상태양광 사업성 검토</small>
+          <small>태양광 입지·사업성 분석 플랫폼</small>
         </a>
         <nav className="nav" aria-label="화면">
           {(["검토", "근거 데이터", "도구"] as const).map((group) => (
