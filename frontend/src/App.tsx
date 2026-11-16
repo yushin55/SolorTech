@@ -12,6 +12,7 @@ import {
   ClipboardCheck,
   CloudSun,
   Database,
+  Factory,
   FileText,
   FileUp,
   GitCompareArrows,
@@ -54,11 +55,13 @@ import {
   gradeOf,
 } from "./mapData";
 import Validation from "./Validation";
+import SolarTech from "./SolarTech";
+import type { AssetImportResult, AssetInputs } from "./SolarTech";
 import { ModelValidation, PlantRecords, WeatherValidation } from "./Records";
 import { GLOSSARY } from "./Steps";
 import ReportBody from "./Report";
 
-type Page = "review" | "data" | "weather" | "model" | "compare" | "validation" | "report";
+type Page = "review" | "data" | "assets" | "weather" | "model" | "compare" | "validation" | "report";
 type Modal =
   | { kind: "project"; project?: Project }
   | { kind: "candidate"; candidate: Candidate; isNew?: boolean }
@@ -70,6 +73,7 @@ const icons: Record<Page, LucideIcon> = {
   compare: GitCompareArrows,
   report: FileText,
   data: Database,
+  assets: Factory,
   weather: CloudSun,
   model: ChartLine,
   validation: FileUp,
@@ -131,6 +135,15 @@ const pages: {
     title: "K-water 운영실적 데이터",
     description:
       "아산정수장 일 발전량과 26개 발전소 일 전력거래량을 품질 점검하고 같은 날짜의 물리 모델과 비교합니다.",
+  },
+  {
+    id: "assets",
+    group: "근거 데이터",
+    label: "설비정보·발전실적",
+    hint: "SolarTech 엑셀·ZIP 실적",
+    title: "SolarTech 설비정보·발전실적",
+    description:
+      "SolarTech 엑셀의 발전소·모듈·인버터 제원을 조회해 사업성 검토로 가져오고, ZIP 발전실적을 완료된 분석과 같은 기간으로 대조합니다.",
   },
   {
     id: "weather",
@@ -549,7 +562,8 @@ export default function App() {
     };
     setModal({ kind: "candidate", candidate: c, isNew: true });
   }
-  function newCandidateFromWater(water: WaterBody) {
+  function newCandidateFromWater(water: WaterBody, siteType: SiteType = "floating") {
+    const layer = siteType === "floating" ? "수면 경계" : siteType === "building" ? "건축물 외곽" : "토지이용 경계";
     setModal({
       kind: "candidate",
       isNew: true,
@@ -567,9 +581,9 @@ export default function App() {
         cable_distance_m: null,
         water_depth_m: null,
         water_level_m: null,
-        site_type: "floating",
+        site_type: siteType,
         reference_plant_id: null,
-        source: `수면 경계 © OpenStreetMap contributors · ${water.id} · ${num(water.area_m2 / 10000, 1)} ha`,
+        source: `${layer} © OpenStreetMap contributors · ${water.id} · ${num(water.area_m2 / 10000, 1)} ha`,
       },
     });
   }
@@ -735,6 +749,16 @@ export default function App() {
     } catch (e) {
       handleError(e);
     }
+  }
+  /** SolarTech 엑셀 발전소 → 후보지 + 설계안 (이미 가져온 발전소는 기존 후보지를 연다). */
+  async function importAsset(assetId: string, values: AssetInputs) {
+    const result = await mutate<AssetImportResult>(`/projects/${projectId}/solartech-assets/${assetId}`, "POST", values);
+    await refreshWorkspace(projectId);
+    setCandidateId(result.candidate.id);
+    setDesignId(result.design?.id || "");
+    setHistoryId("");
+    setPage("review");
+    setNotice(result.already_imported ? "이미 가져온 발전소입니다. 기존 후보지를 열었습니다." : "엑셀 설비정보로 후보지와 설계안을 만들었습니다.");
   }
   function selectCandidate(id: string) {
     setCandidateId(id);
@@ -1095,6 +1119,7 @@ export default function App() {
                 onCreateAtPoint={createAtPoint}
                 onMoveCandidate={moveCandidate}
                 onChangeSiteType={changeSiteType}
+                onPatchCandidate={updateCandidate}
                 onApplyAngle={applyAngle}
                 catalog={catalog}
                 onEditCandidate={() => candidate && setModal({ kind: "candidate", candidate })}
@@ -1135,6 +1160,7 @@ export default function App() {
               />
             )}
             {page === "data" && <PlantRecords onError={handleError} />}
+            {page === "assets" && <SolarTech onImport={importAsset} runs={workspace.runs} />}
             {page === "model" && <ModelValidation onError={handleError} />}
             {page === "weather" && <WeatherValidation onError={handleError} />}
             {page === "compare" && (() => {

@@ -163,6 +163,10 @@ const finance: FieldDef[] = [
   { key: "degradation_pct", label: "연간 열화율", unit: "%", step: 0.1 },
   { key: "curtailment_pct", label: "출력제한 가정", unit: "%", step: 0.1 },
   { key: "stress_pcts", label: "발전량 감소 점검", unit: "%, 쉼표 구분", text: true },
+  { key: "loan_pct", label: "PF 융자 비율 (0 = 자기자본만)", unit: "% (총 공사비)", step: 1, source: "사용자 가정" },
+  { key: "loan_rate_pct", label: "융자 금리", unit: "%/년", step: 0.1, show: (v) => Number(v.loan_pct) > 0 },
+  { key: "loan_years", label: "상환 기간 (원리금균등)", unit: "년", show: (v) => Number(v.loan_pct) > 0 },
+  { key: "grace_years", label: "거치 기간 (이자만 상환)", unit: "년", show: (v) => Number(v.loan_pct) > 0 },
 ];
 export function Fields({
   fields,

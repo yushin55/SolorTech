@@ -378,3 +378,83 @@ export function AssumptionTable({ rows }: { rows?: AssumptionRow[] }) {
     </section>
   );
 }
+
+/** 선택형 자금 조달(PF 융자) 결과. B/C·NPV·IRR은 비차입 기준이고, 여기 값은 자기자본 관점이다. */
+export function FinancingCard({ result }: { result: Result }) {
+  const f = result.economics.financing;
+  if (!f) return null;
+  return (
+    <section className="card">
+      <div className="card-heading">
+        <h3>자금 조달 (PF 융자 가정)</h3>
+      </div>
+      <p className="hint">
+        총 공사비의 {num(f.loan_pct, 0)}%를 연 {num(f.loan_rate_pct, 1)}%로 빌려 거치 {f.grace_years}년 후 {f.loan_years}년 동안
+        원리금균등으로 갚는다고 가정했습니다. 위 B/C·NPV·IRR은 가이드라인대로 비차입 기준입니다.
+      </p>
+      <div className="kpis">
+        <div>
+          <span>융자금 / 자기자본</span>
+          <strong>
+            {eok(f.loan_amount)}
+            <small> / {eok(f.equity)}</small>
+          </strong>
+        </div>
+        <div>
+          <span>연간 원리금</span>
+          <strong>{eok(f.annual_debt_service)}</strong>
+          <small>총이자 {eok(f.total_interest)}</small>
+        </div>
+        <div>
+          <span>자기자본 IRR</span>
+          <strong>{f.equity_irr_pct == null ? "—" : `${num(f.equity_irr_pct, 1)}%`}</strong>
+          <small>회수 {f.equity_payback_years == null ? "기간 내 미회수" : `${num(f.equity_payback_years, 1)}년`}</small>
+        </div>
+        <div>
+          <span>최소 DSCR</span>
+          <strong className={f.min_dscr != null && f.min_dscr < 1 ? "bad" : ""}>
+            {f.min_dscr == null ? "—" : num(f.min_dscr, 2)}
+          </strong>
+          <small>1 미만이면 원리금 상환 부족</small>
+        </div>
+      </div>
+      {f.warnings.map((w) => (
+        <p className="inline-warning" key={w}>
+          {w}
+        </p>
+      ))}
+      <details>
+        <summary>연도별 상환 일정</summary>
+        <div className="table-scroll">
+          <table className="assumption-table">
+            <thead>
+              <tr>
+                <th>연차</th>
+                <th>이자</th>
+                <th>원금</th>
+                <th>원리금</th>
+                <th>잔액</th>
+                <th>자기자본 현금흐름</th>
+                <th>DSCR</th>
+              </tr>
+            </thead>
+            <tbody>
+              {f.schedule.map((r) => (
+                <tr key={r.year}>
+                  <td>{r.year}</td>
+                  <td className="num">{eok(r.interest)}</td>
+                  <td className="num">{eok(r.principal)}</td>
+                  <td className="num">{eok(r.debt_service)}</td>
+                  <td className="num">{eok(r.balance)}</td>
+                  <td className="num">{eok(r.equity_cf)}</td>
+                  <td className="num">{r.dscr == null ? "—" : num(r.dscr, 2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
+      <p className="hint">{f.basis}</p>
+    </section>
+  );
+}

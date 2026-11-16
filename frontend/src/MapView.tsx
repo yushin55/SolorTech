@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import type {
+  SiteType,
   Candidate,
   MappedCandidate,
   Design,
@@ -36,10 +37,26 @@ type Props = {
   onAddCandidate: (position: { latitude: number; longitude: number }) => void;
   onUpdate: (data: Partial<Candidate>) => Promise<void>;
   onAnalyzeAll?: () => void;
-  onAddWater?: (water: WaterBody) => void;
+  onAddWater?: (water: WaterBody, siteType: SiteType) => void;
 };
-// Matches the server's per-request limit for the water body search.
-const WATER_MAX = { width: 0.8, height: 0.6 };
+type FindKind = "water" | "land" | "building";
+// Matches the server's per-request limits (waterbodies.py · sitefinder.py).
+const FIND: Record<FindKind, { width: number; height: number; label: string; obj: string; siteType: SiteType; busy: string; note: string; empty: string }> = {
+  water: {
+    width: 0.8, height: 0.6, label: "수면", obj: "수면을", siteType: "floating", busy: "저수지·호수 경계",
+    note: "점선 사각형 안의 1 ha 이상 저수지·호수·연못입니다.", empty: "이 범위에서 수면을 찾지 못했습니다.",
+  },
+  land: {
+    width: 0.3, height: 0.2, label: "지상 부지", obj: "지상 부지를", siteType: "land", busy: "유휴 부지·주차장 경계",
+    note: "점선 사각형 안의 2,000 m² 이상 유휴 부지·주차장·매립지·염전·초지입니다. 농지·임야는 찾지 않습니다.",
+    empty: "이 범위에서 지상 부지를 찾지 못했습니다.",
+  },
+  building: {
+    width: 0.1, height: 0.08, label: "건축물", obj: "건축물을", siteType: "building", busy: "건축물 외곽",
+    note: "점선 사각형 안의 30 m² 이상 건축물입니다. 지붕 구조·하중·소유는 확인되지 않았습니다.",
+    empty: "이 범위에서 건축물을 찾지 못했습니다.",
+  },
+};
 const hectares = (m2: number) => num(m2 / 10000, m2 < 100000 ? 1 : 0);
 const waterName = (w: WaterBody) => w.name || `이름 없는 ${w.kind}`;
 function inRing(x: number, y: number, ring: number[][]) {
@@ -148,8 +165,9 @@ export default function MapView({
   const [metric, setMetric] = useState<MapMetric>("grade"),
     [target, setTarget] = useState<SearchLocation | null>(null),
     [center, setCenter] = useState({ latitude: 36.4, longitude: 127.8 });
+  const [findKind, setFindKind] = useState<FindKind>("water");
   const [water, setWater] = useState<
-    (WaterSearch & { bbox: [number, number, number, number] }) | null
+    (WaterSearch & { bbox: [number, number, number, number]; kind: FindKind }) | null
   >(null),
     [waterBusy, setWaterBusy] = useState(false),
     [waterError, setWaterError] = useState(""),
@@ -572,8 +590,9 @@ export default function MapView({
     const b = m.getBounds(),
       c = m.getCenter();
     // Very wide views search the centre of the screen only.
-    const halfW = Math.min((b.getEast() - b.getWest()) / 2, WATER_MAX.width / 2),
-      halfH = Math.min((b.getNorth() - b.getSouth()) / 2, WATER_MAX.height / 2);
+    const limit = FIND[findKind];
+    const halfW = Math.min((b.getEast() - b.getWest()) / 2, limit.width / 2),
+      halfH = Math.min((b.getNorth() - b.getSouth()) / 2, limit.height / 2);
     const bbox: [number, number, number, number] = [
       c.lng - halfW,
       c.lat - halfH,
@@ -585,13 +604,14 @@ export default function MapView({
     setPicked(null);
     setPanel("water");
     try {
+      const range = `west=${bbox[0]}&south=${bbox[1]}&east=${bbox[2]}&north=${bbox[3]}`;
       const result = await api<WaterSearch>(
-        `/water-bodies?west=${bbox[0]}&south=${bbox[1]}&east=${bbox[2]}&north=${bbox[3]}`,
+        findKind === "water" ? `/water-bodies?${range}` : `/site-candidates?kind=${findKind}&${range}`,
       );
-      setWater({ ...result, bbox });
+      setWater({ ...result, bbox, kind: findKind });
     } catch (cause) {
       setWaterError(
-        cause instanceof Error ? cause.message : "수면을 찾지 못했습니다.",
+        cause instanceof Error ? cause.message : `${limit.obj} 찾지 못했습니다.`,
       );
     } finally {
       setWaterBusy(false);
@@ -686,14 +706,24 @@ export default function MapView({
       <div className="map-toolbar">
         <MapSearch onSelect={navigate} />
         <div className="map-toolbar-actions">
+          <select
+            aria-label="찾을 후보 종류"
+            value={findKind}
+            onChange={(e) => setFindKind(e.target.value as FindKind)}
+            disabled={waterBusy}
+          >
+            <option value="water">수면</option>
+            <option value="land">지상 부지</option>
+            <option value="building">건축물</option>
+          </select>
           <button
             className="btn water"
             onClick={() => void findWater()}
             disabled={!ready || waterBusy}
-            title="지금 보이는 지도 범위의 저수지·호수·연못(1 ha 이상)을 찾습니다"
+            title={`지금 보이는 지도 범위에서 ${FIND[findKind].label} 후보를 OpenStreetMap으로 찾습니다`}
           >
             {waterBusy && <span className="spinner" />}
-            {waterBusy ? "수면 찾는 중…" : "이 지역 수면 찾기"}
+            {waterBusy ? `${FIND[findKind].label} 찾는 중…` : `이 지역 ${FIND[findKind].label} 찾기`}
           </button>
           <button
             className="btn"
@@ -782,11 +812,11 @@ export default function MapView({
               <button
                 className="btn primary"
                 onClick={() => {
-                  onAddWater(picked);
+                  onAddWater(picked, FIND[water?.kind ?? "water"].siteType);
                   setPicked(null);
                 }}
               >
-                이 수면을 후보지로 추가
+                이 {FIND[water?.kind ?? "water"].obj} 후보지로 추가
               </button>
             )}
             <button
@@ -872,7 +902,7 @@ export default function MapView({
               className={panel === "water" ? "active" : ""}
               onClick={() => setPanel("water")}
             >
-              찾은 수면{water ? ` ${water.total}` : ""}
+              찾은 {FIND[water?.kind ?? findKind].label}{water ? ` ${water.total}` : ""}
             </button>
           </div>
         )}
@@ -881,7 +911,7 @@ export default function MapView({
             {waterBusy ? (
               <p className="panel-status">
                 <span className="spinner" />
-                OpenStreetMap에서 저수지·호수 경계를 받는 중입니다. 처음 찾는
+                OpenStreetMap에서 {FIND[findKind].busy}를 받는 중입니다. 처음 찾는
                 지역은 30초~1분 걸릴 수 있습니다.
               </p>
             ) : waterError ? (
@@ -894,8 +924,7 @@ export default function MapView({
             ) : water && water.results.length ? (
               <>
                 <p className="rank-note">
-                  점선 사각형 안의 1 ha 이상 저수지·호수·연못입니다. 클릭하면
-                  지도에서 보여 주고, 후보지로 추가할 수 있습니다.
+                  {FIND[water.kind].note} 클릭하면 지도에서 보여 주고, 후보지로 추가할 수 있습니다.
                 </p>
                 <ol>
                   {water.results.map((body) => (
@@ -917,13 +946,13 @@ export default function MapView({
                 {water.total > water.results.length && (
                   <p className="rank-note">
                     면적이 큰 {water.results.length}곳만 표시합니다. 지도를
-                    확대해 다시 찾으면 작은 수면도 볼 수 있습니다.
+                    확대해 다시 찾으면 더 작은 곳도 볼 수 있습니다.
                   </p>
                 )}
               </>
             ) : (
               <p className="panel-status">
-                {water?.warning || "이 범위에서 수면을 찾지 못했습니다."}
+                {water?.warning || FIND[water?.kind ?? findKind].empty}
               </p>
             )}
             {water && <p className="rank-note">{water.attribution}</p>}

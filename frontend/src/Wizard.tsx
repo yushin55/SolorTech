@@ -11,6 +11,7 @@ import {
   CapacityPlanCard,
   CashInflow,
   ResultSummary,
+  FinancingCard,
   WeatherStationCard,
 } from "./Business";
 import { ReviewSteps, Verdict } from "./Steps";
@@ -51,6 +52,7 @@ export type WizardProps = {
   onCreateAtPoint: (point: Point, name: string, siteType: SiteType) => Promise<void>;
   onMoveCandidate: (point: Point) => Promise<void>;
   onChangeSiteType: (siteType: SiteType) => Promise<void>;
+  onPatchCandidate: (data: Partial<Candidate>) => Promise<void>;
   onApplyAngle: (tilt: number, azimuth: number) => void;
   catalog: Catalog | null;
   onEditCandidate: () => void;
@@ -374,6 +376,9 @@ function SiteStep(p: WizardProps) {
                 }
               }}
             />
+            {(p.candidate.site_type === "land" || p.candidate.site_type === "building") && (
+              <SiteConditions key={p.candidate.id + p.candidate.site_type} candidate={p.candidate} onSave={p.onPatchCandidate} />
+            )}
             <WeatherLink info={siteInfo} />
             {linkedPlant && (
               <p className="hint">K-water 운영실적이 있는 시설이라, 예측과 실제 발전량을 함께 비교합니다.</p>
@@ -623,6 +628,7 @@ function FinalStep(p: WizardProps & { run: Run }) {
           <span className="muted">현금 유출(투자·운영비) 대비 현금 유입(예측 발전량 × 판매단가)</span>
         </div>
         <ResultSummary result={r} />
+        <FinancingCard result={r} />
       </section>
       <ReviewSteps run={p.run} only={["finance"]} />
       <AssumptionTable rows={r.assumption_table} />
@@ -652,5 +658,100 @@ function FinalStep(p: WizardProps & { run: Run }) {
         </div>
       </section>
     </div>
+  );
+}
+
+type ConditionField = { key: keyof Candidate; label: string; unit: string; optional?: boolean; min?: number; max?: number };
+const LAND_FIELDS: ConditionField[] = [
+  { key: "boundary_setback_m", label: "경계 이격", unit: "m", min: 0, max: 100 },
+  { key: "terrain_slope_deg", label: "부지 경사 (빈칸 = 미조사)", unit: "°", optional: true, min: 0, max: 89 },
+  { key: "slope_limit_deg", label: "경사 검토 한계", unit: "°", min: 0, max: 89 },
+];
+const ROOF_FIELDS: ConditionField[] = [
+  { key: "boundary_setback_m", label: "지붕 가장자리 이격", unit: "m", min: 0, max: 100 },
+  { key: "roof_tilt_deg", label: "지붕 경사", unit: "°", min: 0, max: 90 },
+  { key: "roof_azimuth_deg", label: "지붕 방위 (동 90 · 남 180 · 서 270)", unit: "°", min: 90, max: 270 },
+  { key: "roof_allowable_load_kg_m2", label: "허용 추가하중 (빈칸 = 미확인)", unit: "kg/m²", optional: true, min: 0, max: 10000 },
+  { key: "roof_system_load_kg_m2", label: "설치 추가하중 (빈칸 = 미확인)", unit: "kg/m²", optional: true, min: 0, max: 10000 },
+];
+const CONDITION_DEFAULTS: Partial<Record<keyof Candidate, number>> = {
+  boundary_setback_m: 0,
+  slope_limit_deg: 15,
+  roof_tilt_deg: 10,
+  roof_azimuth_deg: 180,
+};
+
+/** 지상·건축물 현장 조사 조건 (팀 레포에서 이식): 경계 이격, 부지 경사, 지붕 설치 방식·하중. */
+function SiteConditions({ candidate, onSave }: { candidate: Candidate; onSave: (data: Partial<Candidate>) => Promise<void> }) {
+  const roof = candidate.site_type === "building";
+  const fields = roof ? ROOF_FIELDS : LAND_FIELDS;
+  const initial = () =>
+    Object.fromEntries(
+      fields.map((f) => {
+        const v = candidate[f.key] as number | null | undefined;
+        return [f.key, v == null ? (f.optional ? "" : String(CONDITION_DEFAULTS[f.key] ?? "")) : String(v)];
+      }),
+    ) as Record<string, string>;
+  const [values, setValues] = useState<Record<string, string>>(initial);
+  const [mount, setMount] = useState<"rack" | "flush">(candidate.roof_mount ?? "rack");
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    const data: Record<string, number | string | null> = {};
+    for (const f of fields) {
+      const text = values[f.key].trim();
+      data[f.key] = text === "" && f.optional ? null : Number(text);
+    }
+    if (roof) data.roof_mount = mount;
+    setBusy(true);
+    try {
+      await onSave(data as Partial<Candidate>);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const invalid = fields.some((f) => {
+    const text = values[f.key].trim();
+    if (text === "") return !f.optional;
+    const n = Number(text);
+    return !Number.isFinite(n) || (f.min != null && n < f.min) || (f.max != null && n > f.max);
+  });
+  return (
+    <details className="site-conditions" open>
+      <summary>{roof ? "건축물 현장 조건" : "지상 부지 현장 조건"}</summary>
+      {roof && (
+        <label className="field">
+          <span>설치 방식</span>
+          <select aria-label="지붕 설치 방식" value={mount} onChange={(e) => setMount(e.target.value as "rack" | "flush")}>
+            <option value="rack">가대형 (설계 경사각 적용)</option>
+            <option value="flush">지붕 밀착형 (지붕 경사·방위 그대로)</option>
+          </select>
+        </label>
+      )}
+      <div className="fields">
+        {fields.map((f) => (
+          <label className="field" key={f.key}>
+            <span>{f.label}</span>
+            <div className="input-unit">
+              <input
+                aria-label={f.label}
+                type="number"
+                step="any"
+                value={values[f.key]}
+                onChange={(e) => setValues({ ...values, [f.key]: e.target.value })}
+              />
+              <small>{f.unit}</small>
+            </div>
+          </label>
+        ))}
+      </div>
+      <p className="hint">
+        {roof
+          ? "지붕 밀착형은 지붕 경사·방위로 발전량을 계산하고 밀착형 온도 모델을 씁니다. 하중이 비어 있거나 설치 하중이 허용 하중을 넘으면 결과에 경고가 붙습니다."
+          : "경계 이격만큼 지도 경계 안쪽을 줄여 배치합니다. 부지 경사가 비어 있거나 검토 한계를 넘으면 결과에 경고가 붙습니다. 인허가 기준 판정은 아닙니다."}
+      </p>
+      <button className="btn block" disabled={busy || invalid} onClick={save}>
+        {busy ? "저장 중…" : "현장 조건 저장"}
+      </button>
+    </details>
   );
 }

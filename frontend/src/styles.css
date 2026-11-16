@@ -2567,7 +2567,7 @@ details.step:not([open]) .step-summary {
   border-radius: var(--radius);
   position: sticky;
   top: 0;
-  z-index: 500;
+  z-index: 1000;
 }
 .stepper li {
   position: relative;
@@ -3290,3 +3290,21 @@ strong.negative {
   padding: 4px 10px; font-size: 12.5px; font-variant-numeric: tabular-nums; color: #1f2a3c;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12); pointer-events: none;
 }
+
+/* ---------- SolarTech 설비정보·발전실적 (팀 레포에서 이식) ---------- */
+.solartech-filters { display: flex; align-items: end; flex-wrap: wrap; gap: 16px; margin-bottom: 16px; }
+.solartech-filters .field { flex: 1; min-width: 180px; }
+.solartech-table { max-height: 480px; }
+.solartech-table thead { position: sticky; top: 0; z-index: 1; background: var(--surface); }
+.solartech-filename { overflow-wrap: anywhere; }
+.solartech-issues { padding-left: 20px; color: #92400e; line-height: 1.8; margin: 16px 0; }
+.btn.outline {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.btn.outline:hover:not(:disabled) {
+  background: var(--primary-weak);
+}
+.site-conditions { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--subtle); }
+.site-conditions summary { cursor: pointer; font-weight: 600; margin-bottom: 8px; }
+.site-conditions .fields { margin: 8px 0; }

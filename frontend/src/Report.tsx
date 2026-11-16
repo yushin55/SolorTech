@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { date, num } from "./api";
 import { MonthlyEnergyChart, ReviewSteps, Term, Verdict } from "./Steps";
 import type { Run } from "./types";
-import { AssumptionTable, CapacityPlanCard, ResultSummary, ScenarioTable, WeatherStationCard } from "./Business";
+import { AssumptionTable, CapacityPlanCard, FinancingCard, ResultSummary, ScenarioTable, WeatherStationCard } from "./Business";
 
 const eok = (won: number | null | undefined, digits = 1) =>
   won == null ? "—" : `${num(won / 100000000, digits)}억 원`;
@@ -151,6 +151,7 @@ export default function ReportBody({ run, appendix }: { run: Run; appendix: Reac
 
       <Section n={7} title="사업성 분석 결과 · 판매단가 시나리오">
         <ResultSummary result={result} />
+        <FinancingCard result={result} />
         {result.steps.revenue.scenarios && <ScenarioTable rows={result.steps.revenue.scenarios} />}
       </Section>
 

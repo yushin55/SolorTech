@@ -149,6 +149,6 @@ describe("Leaflet map runtime", () => {
     fireEvent.click(screen.getByRole("tab", { name: "사업성 순위" }));
     expect(screen.getByText("지도상 수면 밖에 있습니다")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "이 수면을 후보지로 추가" }));
-    expect(onAddWater).toHaveBeenCalledWith(reservoir);
+    expect(onAddWater).toHaveBeenCalledWith(reservoir, "floating");
   });
 });

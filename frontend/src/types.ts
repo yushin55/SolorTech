@@ -90,6 +90,16 @@ export type Candidate = {
   water_depth_m: number | null;
   water_level_m: number | null;
   site_type: SiteType;
+  /** 지상·건축물 현장 조건 (null = 조사값 미입력). 이전 데이터에는 없을 수 있다. */
+  boundary_setback_m?: number;
+  terrain_slope_deg?: number | null;
+  slope_limit_deg?: number;
+  roof_mount?: "rack" | "flush";
+  roof_tilt_deg?: number;
+  roof_azimuth_deg?: number;
+  roof_allowable_load_kg_m2?: number | null;
+  roof_system_load_kg_m2?: number | null;
+  solartech_asset_id?: string | null;
   reference_plant_id: string | null;
   source: string;
 };
@@ -118,6 +128,30 @@ export type Project = {
   last_analysis_at?: string;
   status?: string;
 };
+export type Financing = {
+  loan_pct: number;
+  loan_rate_pct: number;
+  loan_years: number;
+  grace_years: number;
+  loan_amount: number;
+  equity: number;
+  annual_debt_service: number;
+  total_interest: number;
+  equity_irr_pct: number | null;
+  equity_payback_years: number | null;
+  min_dscr: number | null;
+  schedule: {
+    year: number;
+    interest: number;
+    principal: number;
+    debt_service: number;
+    balance: number;
+    equity_cf: number;
+    dscr: number | null;
+  }[];
+  warnings: string[];
+  basis: string;
+};
 export type Economics = {
   capex: number;
   annual_opex: number;
@@ -134,6 +168,7 @@ export type Economics = {
   total_revenue?: number;
   total_opex?: number;
   net_profit?: number;
+  financing?: Financing | null;
   cashflows: {
     year: number;
     generation_kwh: number;
