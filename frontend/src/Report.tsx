@@ -52,7 +52,7 @@ export default function ReportBody({ run, appendix }: { run: Run; appendix: Reac
   return (
     <article className="report">
       <header className="report-title">
-        <span className="report-kicker">수상태양광 사전 사업성 검토 보고서</span>
+        <span className="report-kicker">태양광 사전 사업성 검토 보고서</span>
         <h1>{run.snapshot.candidate.name}</h1>
         <p>
           {run.snapshot.design.name} · {run.snapshot.project.name}

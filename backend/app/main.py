@@ -213,14 +213,14 @@ def create_app(repository=None, seed=None):
         migrate_v2(repo)
         do_seed = seed if seed is not None else os.getenv("SEED_DEMO", "true").lower() == "true"
         if do_seed and not repo.get("meta", "kwater_seeded"):
-            add_project(repo, {"name": "K-water 실적 기반 수상태양광 검토", "description": "OSM 수면 경계(예당저수지·탑정호)와 아산정수장 운영실적 재현 검토. 기상은 ERA5 재분석 관측 이력입니다.", "demo": True})
+            add_project(repo, {"name": "K-water 실적 기반 태양광 검토", "description": "OSM 수면 경계(예당저수지·탑정호)와 아산정수장 운영실적 재현 검토. 기상은 ERA5 재분석 관측 이력입니다.", "demo": True})
             repo.put("meta", {"id": "kwater_seeded", "created_at": now()})
         yield
         app.state.executor.shutdown(wait=True)
         if repository is None:
             repo.close()
 
-    app = FastAPI(title="수상태양광 사업 검토 API", version=VERSION, lifespan=lifespan)
+    app = FastAPI(title="태양광 사업 검토 API", version=VERSION, lifespan=lifespan)
     @app.exception_handler(RequestValidationError)
     async def request_validation_error(request, error):
         # Invalid NaN/Infinity input must still yield a valid JSON error response.

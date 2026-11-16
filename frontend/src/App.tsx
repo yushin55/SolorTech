@@ -1453,7 +1453,7 @@ function ProjectForm({
         <input
           required
           maxLength={120}
-          placeholder="예: 충청권 수상태양광 예비 검토"
+          placeholder="예: 충청권 태양광 예비 검토"
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
