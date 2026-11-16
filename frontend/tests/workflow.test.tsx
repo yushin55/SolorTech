@@ -437,9 +437,9 @@ it("walks the six-step wizard and warns when the draft changes", async () => {
   render(<App />);
   await analyseFromStart(user);
   // Each analysis step shows only its own guideline section.
-  expect(screen.queryByRole("heading", { name: "⑥ 재무성 분석 및 에너지 대체효과" })).toBeNull();
+  expect(screen.queryByRole("heading", { name: "⑥ 재무성 분석" })).toBeNull();
   for (let i = 0; i < 3; i++) await user.click(screen.getByRole("button", { name: /^다음/ }));
-  await screen.findByRole("heading", { name: "⑥ 재무성 분석 및 에너지 대체효과" });
+  await screen.findByRole("heading", { name: "⑥ 재무성 분석" });
   expect(screen.queryByRole("heading", { name: "③ 설치용량 및 연간발전량" })).toBeNull();
   const cards = document.querySelectorAll(".stat");
   expect(cards[0].textContent).toContain("660.0");

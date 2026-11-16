@@ -34,7 +34,6 @@ export default function ReportBody({ run, appendix }: { run: Run; appendix: Reac
     [<Term name="NPV" key="npv" />, eok(e.npv), `${e.cashflows.length - 1}년 · 할인 후`],
     [<Term name="IRR" key="irr" />, e.irr_pct == null ? "—" : `${num(e.irr_pct, 1)}%`, `회수 ${num(e.payback_years, 1)}년`],
     [<Term name="필요 판매단가" key="req" />, `${num(e.required_price_per_kwh, 1)}원/kWh`, `가정 단가 ${num(e.effective_price_per_kwh, 0)}원`],
-    ["CO₂ 감축", `${num(result.steps.substitution.co2_t, 0)} t/년`, `${num(result.steps.substitution.households, 0)}가구 전력`],
   ];
   const steps: [string, string][] = [
     ["① 설치대상지", `${site.province} ${site.nearest_city} · ${site.structure_type === "seasonal" ? "가변형" : `고정형 ${site.tilt}°`} · 정남향 · 설계풍속 ${site.wind_speed_ms} m/s`],

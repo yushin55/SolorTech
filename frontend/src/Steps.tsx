@@ -233,7 +233,7 @@ export function ReviewSteps({
   only?: string[];
 }) {
   const result = run.result!;
-  const { site, equipment, costs, revenue, substitution } = result.steps;
+  const { site, equipment, costs, revenue } = result.steps;
   const e = result.economics;
   const cal = result.calibration;
   // Short label and headline number per step for the board view.
@@ -481,12 +481,11 @@ export function ReviewSteps({
       </Step>
       <Step
         id="finance"
-        title="⑥ 재무성 분석 및 에너지 대체효과"
+        title="⑥ 재무성 분석"
         source="부록 2.7"
         summary={
           <>
-            {e.cashflows.length - 1}년간 B/C <b>{num(e.bc, 2)}</b>, NPV {num(e.npv / 100000000, 1)}억 원. 연간 CO₂{" "}
-            {num(substitution.co2_t, 0)}톤 감축 효과가 있습니다.
+            {e.cashflows.length - 1}년간 B/C <b>{num(e.bc, 2)}</b>, NPV {num(e.npv / 100000000, 1)}억 원입니다.
           </>
         }
       >
@@ -582,38 +581,6 @@ export function ReviewSteps({
           </ResponsiveContainer>
         </div>
         <p className="hint">연도별 순현금흐름(억 원). 0년차는 총 공사비입니다.</p>
-        <h4>에너지 대체효과 (연간)</h4>
-        <div className="metrics">
-          <div>
-            <span>전력 공급 가구수</span>
-            <strong>
-              {num(substitution.households, 1)}
-              <small>가구</small>
-            </strong>
-          </div>
-          <div>
-            <span>유류 대체</span>
-            <strong>
-              {num(substitution.oil_toe, 1)}
-              <small>TOE</small>
-            </strong>
-          </div>
-          <div>
-            <span>소나무 식재 효과</span>
-            <strong>
-              {num(substitution.pine_trees)}
-              <small>그루</small>
-            </strong>
-          </div>
-          <div>
-            <span>CO₂ 감축</span>
-            <strong>
-              {num(substitution.co2_t, 1)}
-              <small>tCO₂</small>
-            </strong>
-          </div>
-        </div>
-        <p className="hint">{substitution.basis}</p>
       </Step>
       </>
     ).props.children,
