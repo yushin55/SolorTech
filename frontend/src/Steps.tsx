@@ -17,6 +17,7 @@ import {
   YAxis,
 } from "recharts";
 import { num } from "./api";
+import { FinancialAssumptions, OrientationComparison, RevenueDetails, SizingDetails, WeatherDetails } from "./Feasibility";
 import type { Candidate, Catalog, Design, Financing, Result, Run } from "./types";
 
 // Validated categorical order (dataviz validator: all checks pass on white).
@@ -34,6 +35,7 @@ const SITE_TYPE: Record<string, string> = {
   plant: "정수장 부지",
   basin: "침전지 상부",
   land: "육상",
+  rooftop: "건축물 (지붕·옥상)",
 };
 const SEASON: Record<string, string> = {
   spring: "봄",
@@ -68,7 +70,7 @@ export const WIZARD_STEPS: { id: StepId; label: string; title: string; descripti
     id: "site",
     label: "설치대상지 선정",
     title: "① 설치대상지 선정",
-    description: "검토할 수면 후보지를 고르거나 지도에서 새로 추가합니다. 경계·제외 구역·연결점도 여기서 지정합니다.",
+    description: "검토할 후보지(수상·지상·건축물)를 고르거나 지도에서 새로 찾아 추가합니다. 경계·제외 구역·연결점도 여기서 지정합니다.",
   },
   {
     id: "equipment",
@@ -168,7 +170,7 @@ export function ReviewOverview({
       steps ? `${steps.site.province} ${steps.site.nearest_city} · ${SITE_TYPE[steps.site.site_type] ?? ""}` : candidate ? SITE_TYPE[candidate.site_type] : undefined,
     ],
     [
-      "수면 면적",
+      candidate?.site_type === "floating" ? "수면 면적" : "부지·지붕 면적",
       area != null ? `${num(area / 10000, 1)} ha` : candidate && !candidate.geometry ? "경계 없음" : "—",
       steps?.equipment.usable_area_m2 != null ? `이용 가능 ${num(steps.equipment.usable_area_m2 / 10000, 1)} ha` : undefined,
     ],
@@ -266,12 +268,14 @@ export function Verdict({ result }: { result: Result }) {
   const p10 = result.stress.find((s) => s.label.includes("P10"));
   const bc = e.bc ?? 0;
   const robust = result.stress.every((s) => (s.bc ?? 0) >= 1);
-  const tone: Tone = bc >= 1 && robust ? "good" : bc >= 1 ? "warn" : "bad";
+  const land = result.steps.site.site_type !== "floating";
+  const siteChecks = land ? result.provenance.warnings.filter((w) => /부지 경사|지붕|배치 가능한/.test(w)) : [];
+  const tone: Tone = bc >= 1 && robust && !siteChecks.length ? "good" : bc >= 1 ? "warn" : "bad";
   const headline =
     tone === "good"
       ? "사업성이 확인됩니다"
       : tone === "warn"
-        ? "기준 조건에서는 사업성이 있지만, 발전량이 줄면 위험합니다"
+        ? siteChecks.length ? "수익 조건과 함께 현장·구조 조건 확인이 필요합니다" : "기준 조건에서는 사업성이 있지만, 발전량이 줄면 위험합니다"
         : "현재 조건에서는 사업성이 부족합니다";
   const margin =
     e.required_price_per_kwh == null
@@ -286,6 +290,7 @@ export function Verdict({ result }: { result: Result }) {
         <h2>{headline}</h2>
       </div>
       <ul>
+        {siteChecks.map((warning) => <li key={warning}>{warning}</li>)}
         <li>
           연간 <b>{num(result.annual_kwh / 1000, 0)} MWh</b> 발전이 예상됩니다
           {cal && result.energy_basis === "calibrated" ? (
@@ -379,7 +384,7 @@ function ModuleComparison({
   const area = comparison.usable_area_m2 != null;
   return (
     <div className="module-comparison">
-      <h4>모듈별 같은 수면 설치 비교</h4>
+      <h4>모듈별 같은 후보지 설치 비교</h4>
       <div className="table-scroll">
         <table>
           <thead>
@@ -418,7 +423,7 @@ function ModuleComparison({
       </div>
       <p className="hint">
         {comparison.basis}
-        {area ? ` · 이용 가능 수면 ${num(comparison.usable_area_m2! / 10000, 2)} ha 기준` : " · 후보지 경계가 없어 면적당 값만 비교"}
+        {area ? ` · 이용 가능 면적 ${num(comparison.usable_area_m2! / 10000, 2)} ha 기준` : " · 후보지 경계가 없어 면적당 값만 비교"}
       </p>
     </div>
   );
@@ -514,7 +519,7 @@ function guidelineSteps(result: Result) {
         source="가이드라인 3.5 · 표 3-4·3-18~3-21"
         summary={
           <>
-            {site.province} {site.nearest_city} 권역 · 정남향{" "}
+            {site.province} {site.nearest_city} 권역 · 방위 {site.azimuth}°{" "}
             {site.structure_type === "seasonal" ? "가변형(계절별 경사 조정)" : `고정형 ${site.tilt}°`} ·
             풍속 {site.wind_speed_ms} m/s 기준으로 설계합니다.
           </>
@@ -543,6 +548,20 @@ function guidelineSteps(result: Result) {
             ["지진구역", `${site.seismic_zone} · ${site.seismic_coeff_g}g`],
           ]}
         />
+        {site.site_type !== "floating" && site.conditions && <>
+          <h4>육상·건축물 현장 조건</h4>
+          <Facts rows={[
+            ["경계 이격", `${num(site.conditions.boundary_setback_m ?? 0, 1)} m`, "사용자 설계값 · 경계에서 안쪽으로 차감"],
+            ["추가 음영손실", `${num(site.conditions.shading_loss_pct ?? 0, 1)}%`, "시스템 손실과 별도 곱 적용"],
+            ...(site.site_type === "land" ? [["부지 경사 / 검토 한계", `${site.conditions.terrain_slope_deg == null ? "미확인" : `${num(site.conditions.terrain_slope_deg, 1)}°`} / ${num(site.conditions.slope_limit_deg ?? 15, 1)}°`, "사용자 조사·가정 · 법정 기준 아님"] as [string, ReactNode, string]] : []),
+            ...(site.site_type === "rooftop" ? [
+              ["지붕 설치 방식", site.conditions.roof_mount === "flush" ? "지붕 밀착형" : "가대형"] as [string, ReactNode],
+              ["허용 / 설치 추가하중", `${site.conditions.roof_allowable_load_kg_m2 == null ? "미확인" : num(site.conditions.roof_allowable_load_kg_m2, 1)} / ${site.conditions.roof_system_load_kg_m2 == null ? "미확인" : num(site.conditions.roof_system_load_kg_m2, 1)} kg/m²`, "구조 검토값 · 모듈·가대·밸러스트 포함"] as [string, ReactNode, string],
+            ] : []),
+          ]} />
+          {result.provenance.warnings.map((warning) => <p className="hint" key={warning}>{warning}</p>)}
+        </>}
+        {result.weather_station && <WeatherDetails value={result.weather_station} />}
         {site.climate && <ClimateCheck climate={site.climate} />}
       </Step>
       <Step
@@ -561,7 +580,7 @@ function guidelineSteps(result: Result) {
         <Facts
           rows={[
             [
-              "수면 면적",
+              site.site_type === "floating" ? "수면 면적" : "부지·지붕 면적",
               equipment.area_m2 == null
                 ? "경계 없음"
                 : `${num(equipment.area_m2 / 10000, 2)} ha`,
@@ -617,6 +636,7 @@ function guidelineSteps(result: Result) {
             ],
           ]}
         />
+        {result.sizing && <SizingDetails value={result.sizing} />}
         {equipment.module_loads && <ModuleLoads loads={equipment.module_loads} />}
         {equipment.module_comparison && <ModuleComparison comparison={equipment.module_comparison} />}
         {equipment.strings.warnings.map((w, i) => (
@@ -631,7 +651,7 @@ function guidelineSteps(result: Result) {
         source={`${result.physics.years[0]}~${result.physics.years.at(-1)} ERA5 시간자료`}
         summary={
           <>
-            {result.physics.years.length}년 실제 기상으로 계산하면 연간 <b>{num(result.annual_kwh / 1000, 0)} MWh</b>
+            {result.physics.years.length}년 기상 시간분포로 계산하면 연간 <b>{num(result.annual_kwh / 1000, 0)} MWh</b>
             {result.energy_basis === "calibrated"
               ? ` (운영실적 보정 후, 보정 전 물리 모델보다 ${num((1 - result.annual_kwh / result.physics.annual_kwh) * 100, 1)}% 낮음)`
               : " (물리 모델 단독)"}
@@ -662,6 +682,7 @@ function guidelineSteps(result: Result) {
           </div>
         </div>
         <MonthlyEnergyChart result={result} />
+        <OrientationComparison result={result} />
         <p className="hint">
           {cal && result.energy_basis === "calibrated"
             ? `${cal.model_label} · 오차 막대는 ${cal.band_basis}(발전소 ${cal.band_plants}곳)의 월별 P10–P90입니다. 장소 분리 검증 월 MAPE ${num(cal.validation.all.mape_pct, 1)}%${cal.validation.floating ? `, 수상 ${num(cal.validation.floating.mape_pct, 1)}%` : ""}.`
@@ -748,6 +769,8 @@ function guidelineSteps(result: Result) {
             ["1년차 수익", `${num(revenue.first_year_revenue / 10000)} 만 원`],
           ]}
         />
+        <RevenueDetails result={result} />
+        <FinancialAssumptions result={result} />
       </Step>
       <Step
         id="finance"

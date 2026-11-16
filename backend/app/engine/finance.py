@@ -48,10 +48,10 @@ def sale_price(finance):
     """KRW/kWh for exported energy. REC inputs are KRW/REC (1 MWh) × weight."""
     mode = finance.get("sale_mode", "fixed")
     if mode == "fixed":
-        return number(finance, "fixed_price", default=150, minimum=0)
+        return number(finance, "fixed_price", default=150)
     if mode == "smp_rec":
-        return number(finance, "smp_price", default=100, minimum=0) + number(
-            finance, "rec_price", default=70000, minimum=0) / 1000 * number(finance, "rec_weight", default=1, minimum=0)
+        return number(finance, "smp_price", default=100) + number(
+            finance, "rec_price", default=70000) / 1000 * number(finance, "rec_weight", default=1, minimum=0)
     raise ValueError("sale_mode: fixed 또는 smp_rec이어야 합니다.")
 
 
@@ -182,6 +182,7 @@ def calculate_finance(annual_kwh, capex, costs, finance, purpose="sale"):
         "pv_inflow": discounted_benefits, "pv_outflow": discounted_costs,
         "npv": discounted_benefits - discounted_costs, "bc": bc,
         "irr_pct": irr, "payback_years": payback, "cashflows": flows,
+        "net_profit": flows[-1]["cumulative"],
         "effective_price_per_kwh": price, "required_price_per_kwh": required,
         "warnings": warnings,
     }

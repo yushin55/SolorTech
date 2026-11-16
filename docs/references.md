@@ -45,6 +45,14 @@ Firestore는 React에서 직접 쓰지 않고 FastAPI의 Admin SDK 어댑터로 
 - 경계는 OpenStreetMap 기여자 지도 자료([ODbL](https://www.openstreetmap.org/copyright))이며 측량 수면이 아니다. 수위에 따라 실제 수면 면적이 달라진다.
 - 결과는 서버 메모리(24시간)와 `backend/data/water-cache`(30일)에 캐시한다. 공용 서버는 혼잡할 때 첫 조회에 30초~1분이 걸리거나 실패할 수 있다. `WATER_PROVIDER=off`로 끌 수 있다.
 
+## 지상 부지·건축물 후보 경계
+
+- ‘이 지역 후보 찾기’의 지상·건축물도 같은 Overpass 서버에 보이는 지도 범위만 보낸다. 한 번에 지상은 경도 0.3° × 위도 0.2°(0.05° 격자), 건축물은 0.1° × 0.08°(0.02° 격자)까지다.
+- 지상 대상: `landuse=brownfield|greenfield|landfill|quarry|salt_pond|meadow`, `natural=grassland`, `amenity=parking`(지하·주차건물·노상 제외), 2,000 m² 이상. 농지(`farmland`)·임야(`forest`)는 이용 제한과 법적 검토가 필요해 검색하지 않는다.
+- 건축물 대상: `building=*` 외곽 1,000 m² 이상. 비닐하우스(`greenhouse`)·공사 중·폐허·지하 시설은 제외한다.
+- OSM 태그는 지도에 그려진 현황일 뿐 지적 경계·지목·용도지역·경사·소유·지붕 구조·허용 하중을 뜻하지 않는다. 찾은 곳은 1차 선별용이며 후보지 출처에 ‘미확인’으로 남긴다.
+- 캐시는 `backend/data/water-cache/land`, `backend/data/water-cache/building`(30일)이며 `WATER_PROVIDER=off`가 세 검색을 모두 끈다.
+
 ## 카카오 장소·주소 검색 (선택)
 
 - `GEOCODING_PROVIDER=kakao`와 `KAKAO_REST_API_KEY`를 설정하면 시·군 이름이 아닌 검색어(아파트·건물·도로명 주소 등)를 [카카오 로컬 API](https://developers.kakao.com/docs/latest/ko/local/dev-guide) 키워드 검색으로, 결과가 없으면 주소 검색으로 조회한다. 키는 서버 환경변수에만 둔다.

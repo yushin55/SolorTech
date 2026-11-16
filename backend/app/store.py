@@ -7,6 +7,16 @@ import uuid
 from pathlib import Path
 
 
+def strip_run(run):
+    """A run without its bulky series: enough for lists, summaries and the workspace."""
+    result = run.get("result")
+    if result:
+        result.pop("hourly", None)
+        if result.get("layout"):
+            result["layout"].pop("modules", None)
+    return run
+
+
 class LocalRepository:
     storage = "local"
 
@@ -35,6 +45,18 @@ class LocalRepository:
     def list(self, kind):
         with self.lock:
             rows = self.connection.execute("SELECT data FROM documents WHERE kind=? ORDER BY rowid", (kind,)).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
+    def run_summaries(self):
+        """Every run without hourly series and module outlines, trimmed inside SQLite.
+
+        Parsing megabytes of outlines on each project load made the app stall
+        while it polled a running analysis.
+        """
+        with self.lock:
+            rows = self.connection.execute(
+                "SELECT json_remove(data, '$.result.hourly', '$.result.layout.modules') "
+                "FROM documents WHERE kind='runs' ORDER BY rowid").fetchall()
         return [json.loads(row[0]) for row in rows]
 
     def delete(self, kind, identifier):
@@ -112,6 +134,9 @@ class FirestoreRepository:
 
     def list(self, kind):
         return [self.get(kind, record.id) for record in self.client.collection(self.prefix + kind).stream()]
+
+    def run_summaries(self):
+        return [strip_run(run) for run in self.list("runs")]
 
     def delete(self, kind, identifier):
         with self.lock:

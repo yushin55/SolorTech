@@ -67,8 +67,11 @@ def calculate_layout(candidate, equipment):
         raise ValueError("후보지 기준 좌표와 경계를 확인해 주세요. 유효한 지역 면적을 계산할 수 없습니다.")
     # Distant exclusions do not affect this site and need not be projected.
     projected_exclusions = [transform(forward.transform, exclusion.intersection(outer)) for exclusion in exclusions]
-    usable = projected.difference(unary_union(projected_exclusions)) if exclusions else projected
-    requested = integer(equipment, "module_count", minimum=0, maximum=100000)
+    setback = (number(candidate, "boundary_setback_m", default=0, minimum=0, maximum=100)
+               if candidate.get("site_type") != "floating" else 0)
+    usable = projected.buffer(-setback) if setback else projected
+    usable = usable.difference(unary_union(projected_exclusions)) if exclusions else usable
+    requested = integer(equipment, "module_count", minimum=0, maximum=200000)
     width = number(equipment, "module_width_m", default=1.134, minimum=.05, maximum=10)
     height = number(equipment, "module_height_m", default=2.278, minimum=.05, maximum=20)
     spacing = number(equipment, "row_spacing_m", default=1.5, minimum=0, maximum=100)
@@ -76,6 +79,8 @@ def calculate_layout(candidate, equipment):
     angle = 180 - azimuth
     aligned = affinity.rotate(usable, -angle, origin=(0, 0))
     warnings = ["개략 모듈 배치입니다. 부유체·통로·계류·행간 그늘·구조 안전 및 규제상 설치 가능성을 검증하지 않았습니다."]
+    if candidate.get("site_type") != "floating":
+        warnings = ["수평 투영 경계의 개략 배치입니다. 지형 단차·지붕 형상·통로·구조 안전·인허가는 별도 검토가 필요합니다."]
     modules = []
     if not aligned.is_empty and requested:
         min_x, min_y, max_x, max_y = aligned.bounds

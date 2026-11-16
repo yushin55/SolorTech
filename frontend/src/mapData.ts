@@ -1,5 +1,16 @@
 import type { FeatureCollection, Polygon as GeoJSONPolygon } from "geojson";
-import type { Candidate, Design, MappedCandidate, Result, Run } from "./types";
+import type { Candidate, Design, MappedCandidate, Result, Run, SiteType } from "./types";
+
+/** Short installation-type names shown on pins and in the ranking. */
+export const siteTypeLabels: Record<SiteType, string> = {
+  floating: "수상",
+  land: "지상",
+  rooftop: "건축물",
+  plant: "정수장",
+  basin: "침전지",
+};
+export const siteTypeOf = (candidate: Candidate): SiteType =>
+  candidate.site_type ?? "floating";
 
 export type MapMetric =
   | "grade"
@@ -130,6 +141,15 @@ export function candidateInputSignature(candidate: Candidate): string {
     water_depth_m: candidate.water_depth_m,
     water_level_m: candidate.water_level_m,
     site_type: candidate.site_type,
+    boundary_setback_m: candidate.boundary_setback_m ?? 0,
+    shading_loss_pct: candidate.shading_loss_pct ?? 0,
+    terrain_slope_deg: candidate.terrain_slope_deg ?? null,
+    slope_limit_deg: candidate.slope_limit_deg ?? 15,
+    roof_mount: candidate.roof_mount ?? "rack",
+    roof_tilt_deg: candidate.roof_tilt_deg ?? 10,
+    roof_azimuth_deg: candidate.roof_azimuth_deg ?? 180,
+    roof_allowable_load_kg_m2: candidate.roof_allowable_load_kg_m2 ?? null,
+    roof_system_load_kg_m2: candidate.roof_system_load_kg_m2 ?? null,
     reference_plant_id: candidate.reference_plant_id,
   });
 }
@@ -252,14 +272,18 @@ export function buildDistribution(
 }
 
 export function candidateBounds(
-  candidates: MappedCandidate[],
+  candidates: Candidate[],
 ): [number, number, number, number] | null {
   let west = Infinity;
   let south = Infinity;
   let east = -Infinity;
   let north = -Infinity;
   for (const candidate of candidates) {
-    for (const coordinate of candidate.geometry.coordinates[0] || []) {
+    // A site without a boundary still counts by its position.
+    const ring = candidate.geometry?.coordinates[0] || [
+      [candidate.longitude, candidate.latitude],
+    ];
+    for (const coordinate of ring) {
       const [longitude, latitude] = coordinate;
       if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) continue;
       west = Math.min(west, longitude);
@@ -311,7 +335,7 @@ export function gradeOf(result: Result | null | undefined): Grade {
 }
 
 export type SiteRanking = {
-  candidate: MappedCandidate;
+  candidate: Candidate;
   design: Design | null;
   run: Run | null;
   grade: Grade;
@@ -321,7 +345,7 @@ export type SiteRanking = {
 };
 /** Rank saved sites by their best current design (highest B/C, then NPV). */
 export function rankCandidates(
-  candidates: MappedCandidate[],
+  candidates: Candidate[],
   designs: Design[],
   runs: Run[],
 ): SiteRanking[] {

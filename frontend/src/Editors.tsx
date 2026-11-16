@@ -1,6 +1,7 @@
 import { useState } from "react";
-import type { Candidate, Catalog, CatalogInverter, CatalogModule, Design, Settings } from "./types";
+import type { Candidate, Catalog, CatalogInverter, CatalogModule, Design, Settings, TerrainMode } from "./types";
 import { num } from "./api";
+import { CandidateWeather, CapacityPreview } from "./Feasibility";
 export type FieldDef = {
   key: string;
   label: string;
@@ -13,6 +14,7 @@ export type FieldDef = {
   /** Short provenance badge, e.g. the guideline table or "견적 가정". */
   source?: string;
   text?: boolean;
+  disabled?: boolean;
 };
 const custom = (v: Settings) => v.module_preset === "custom";
 const guidelineInverter = (v: Settings) => !v.inverter_model || v.inverter_model === "guideline";
@@ -71,6 +73,8 @@ const equipment: FieldDef[] = [
     source: "표 3-9 · 제조사 카탈로그",
   },
   { key: "module_model", label: "모듈 모델명", text: true, show: custom },
+  { key: "module_manufacturer", label: "모듈 제조사", text: true, show: custom },
+  { key: "module_source", label: "모듈 자료 출처 · 공식 카탈로그 등", text: true, show: custom },
   { key: "module_power_w", label: "모듈 정격출력", unit: "W", step: 5, show: custom },
   { key: "module_width_m", label: "모듈 폭", unit: "m", step: 0.001, show: custom },
   { key: "module_height_m", label: "모듈 길이", unit: "m", step: 0.001, show: custom },
@@ -79,8 +83,10 @@ const equipment: FieldDef[] = [
     key: "capacity_mode",
     label: "설치 용량 결정",
     options: [
+      ["area_input", "부지 면적 직접 입력"],
+      ["target", "원하는 총 설비용량 입력"],
       ["count", "모듈 수량 입력"],
-      ["area", "수면 면적 × 이용률 (가이드라인 이격거리)"],
+      ["area", "지도 경계 면적 × 이용률 (기존 방식)"],
     ],
     source: "부록 2.4",
   },
@@ -88,8 +94,17 @@ const equipment: FieldDef[] = [
     key: "module_count",
     label: "모듈 수량",
     unit: "장",
-    show: (v) => v.capacity_mode !== "area",
+    show: (v) => v.capacity_mode === "count",
   },
+  { key: "site_area_m2", label: "부지 면적", unit: "m²", step: 0.1, show: (v) => v.capacity_mode === "area_input" },
+  { key: "reserve_pct", label: "통로·장애물 여유 면적", unit: "%", step: 0.1, source: "견적 가정", show: (v) => v.capacity_mode === "area_input" },
+  { key: "target_capacity_kw", label: "원하는 총 설비용량", unit: "kW", step: 0.001, show: (v) => v.capacity_mode === "target" },
+  { key: "float_model", label: "부유체 모델·제원명", text: true },
+  { key: "float_buoyancy_kg", label: "부유체 단위 부력 · 참고 제원", unit: "kg", required: false },
+  { key: "float_source", label: "부유체 제원 출처", text: true },
+  { key: "mooring_model", label: "계류장치 모델·제원명", text: true },
+  { key: "mooring_design_load_kn", label: "계류 설계하중 · 참고 제원", unit: "kN", required: false },
+  { key: "mooring_source", label: "계류장치 제원 출처", text: true },
   {
     key: "area_use_pct",
     label: "수면 이용률",
@@ -218,7 +233,9 @@ const revenue: FieldDef[] = [
     ],
     source: "부록 2.6",
   },
-  { key: "fixed_price", label: "계약 단가", unit: "원/kWh", step: 0.1, show: (v) => v.sale_mode === "fixed" },
+  { key: "fixed_price", label: "계약 단가", unit: "원/kWh", step: 0.1, source: "사용자 가정", show: (v) => v.sale_mode === "fixed" },
+  { key: "price_source", label: "판매단가 가정 출처", text: true },
+  { key: "price_scenarios", label: "비교 판매단가 · 쉼표 구분 (원/kWh)", text: true },
   { key: "smp_price", label: "SMP", unit: "원/kWh", step: 0.1, show: (v) => v.sale_mode === "smp_rec" },
   { key: "rec_price", label: "REC 가격", unit: "원/REC", show: (v) => v.sale_mode === "smp_rec" },
   { key: "rec_weight", label: "REC 가중치 (고시 확인)", step: 0.1, show: (v) => v.sale_mode === "smp_rec" },
@@ -269,6 +286,7 @@ export function Fields({
             </span>
             {f.options ? (
               <select
+                disabled={f.disabled}
                 aria-label={f.label}
                 value={values[f.key]}
                 onChange={(e) => onChange(f.key, e.target.value)}
@@ -285,6 +303,7 @@ export function Fields({
             ) : (
               <div className="input-unit">
                 <input
+                  disabled={f.disabled}
                   aria-label={f.label}
                   required={f.required !== false}
                   type={f.text ? "text" : "number"}
@@ -451,7 +470,7 @@ const sections: Record<
     title: "판매 조건 (⑤)",
     fields: revenue,
     key: "finance",
-    hint: "고정가격 계약은 경쟁입찰 낙찰가, SMP + REC는 시장가격 기준입니다. 소내소비용은 소내 사용분을 전기요금 단가로 환산합니다.",
+    hint: "매출은 예측 판매전력량 × 사용자 판매단가입니다. 실제 판매실적이 아니며, 판매단가·비교단가에는 상하한 제한이 없습니다. 최소 필요 판매단가는 SolarTech 계산 참고값입니다. 자가소비는 사용분을 전기요금 단가로 환산합니다.",
   },
   finance: {
     title: "재무 조건 (⑥)",
@@ -469,16 +488,35 @@ export function DesignEditor({
   dirty,
   saving,
   catalog,
+  candidate,
 }: {
   design: Design;
   show: Section[];
   catalog?: Catalog | null;
+  candidate?: Candidate | null;
   onChange: (d: Design) => void;
   onSave: () => void;
   dirty: boolean;
   saving: boolean;
 }) {
   const eq = design.equipment;
+  const land = !!candidate && candidate.site_type !== "floating";
+  const dedicated = candidate?.site_type === "land" || candidate?.site_type === "rooftop";
+  const flush = candidate?.site_type === "rooftop" && candidate.roof_mount === "flush";
+  function terrainFields(fields: FieldDef[]): FieldDef[] {
+    return fields.filter((f) => !(flush && ["structure_type", "tilt_mode", "tilt", "azimuth", "spacing_mode", "row_spacing_m"].includes(f.key)))
+      .map((f) => {
+        if (land && (f.key.startsWith("float_") || f.key.startsWith("mooring_"))) return { ...f, disabled: true };
+        if (!land) return f;
+        if (f.key === "energy_basis" && dedicated) return { ...f, options: [["physics", "물리 모델 (육상·건축물 조건 반영)"]] };
+        if (f.key === "area_use_pct") return { ...f, label: "유효 부지·지붕 이용률" };
+        if (f.key === "tilt_mode" && dedicated) return { ...f, source: "예비설계 가정", options: [["guideline", "위도 기반 예비 경사각 자동"], ["manual", "직접 입력"]] };
+        if (f.key === "structure_per_kw") return { ...f, label: "가대·기초·건축물 구조물" };
+        if (f.key === "cable_per_m") return { ...f, label: "육상·건축물 연계 케이블" };
+        if (f.key === "civil" && candidate?.site_type === "rooftop") return { ...f, label: "건축·방수·보강 공사 총액" };
+        return f;
+      });
+  }
   const catalogModule = catalog?.modules.find((m) => m.id === eq.module_preset);
   const catalogInverter = catalog?.inverters?.find((i) => i.id === eq.inverter_model);
   return (
@@ -512,15 +550,20 @@ export function DesignEditor({
                   grace_years: 0,
                   ...(design.finance as Settings),
                   stress_pcts: stressText(design.finance.stress_pcts),
+                  price_scenarios: stressText(design.finance.price_scenarios ?? [100, 150, 200]),
                   purpose: eq.purpose,
                 }
               : group.key === "costs"
                 ? { ...design.costs, inverter_model: eq.inverter_model }
-                : design[group.key];
+                : { site_area_m2: 10000, target_capacity_kw: 100, reserve_pct: 20,
+                    module_manufacturer: "미지정 (가이드라인 예시)", module_source: "K-water 표 3-9",
+                    float_model: "사용자 제원 미입력", float_source: "사용자 조사·견적 가정", float_buoyancy_kg: 0,
+                    mooring_model: "사용자 제원 미입력", mooring_source: "사용자 조사·견적 가정", mooring_design_load_kn: 0,
+                    ...design[group.key] };
           return (
             <div className="inspector-section" key={s}>
               <h4>{group.title}</h4>
-              {s === "equipment" && eq.capacity_mode !== "area" && (
+              {s === "equipment" && eq.capacity_mode === "count" && (
                 <div className="capacity">
                   <span>입력 DC 용량 (직렬 단위 조정 전)</span>
                   <strong>
@@ -539,22 +582,30 @@ export function DesignEditor({
                 </div>
               )}
               <Fields
-                fields={group.fields}
-                values={values}
+                fields={terrainFields(group.fields)}
+                values={dedicated && group.key === "equipment" ? { ...values, energy_basis: "physics" } : values}
                 onChange={(k, v) =>
                   onChange({
                     ...design,
                     [group.key]: {
                       ...design[group.key],
-                      [k]: k === "stress_pcts" ? parseStress(v) : v,
+                      [k]: k === "stress_pcts" || k === "price_scenarios" ? parseStress(v) : v,
                     },
                   })
                 }
               />
               {s === "equipment" && (
-                <CatalogSpecs module={catalogModule} inverter={catalogInverter} />
+                <>
+                  {candidate && <CapacityPreview candidate={candidate} equipment={eq} />}
+                  <CatalogSpecs module={catalogModule} inverter={catalogInverter} />
+                  <p className="hint">{land ? "부유체·계류장치 제원은 수상 선택 시 활성화됩니다." : "부유체·계류장치 제원은 참고 기록이며 부력·계류 구조 안전을 자동 판정하지 않습니다. 제품 카탈로그 확보 전에는 직접 입력합니다."}</p>
+                </>
               )}
-              <p className="hint">{group.hint}</p>
+              <p className="hint">{land && s === "site" ? flush
+                ? "지붕 밀착형은 후보지 설정의 지붕 경사·방위를 사용합니다. 행간은 0 m이며 통로·장애물은 제외 구역으로 지정하세요."
+                : "육상·건축물은 위도 기반 예비 경사각 또는 직접 입력값을 사용합니다. 실제 지형·지붕과 구조 조건을 확인하세요."
+                : land && s === "equipment" ? "육상·건축물은 물리 모델로 음영손실과 설치 방식별 온도를 반영합니다. 경계 이격·제외 구역은 후보지 설정에서 지정하며, 배치 가능한 수량으로 계산합니다."
+                : group.hint}</p>
             </div>
           );
         })}
@@ -577,17 +628,20 @@ export function CandidateForm({
 }: {
   candidate: Candidate;
   onSubmit: (candidate: Candidate) => void;
+  terrainMode?: TerrainMode;
 }) {
   const [value, setValue] = useState(candidate);
+  const land = value.site_type !== "floating";
   const fields: FieldDef[] = [
     {
       key: "site_type",
-      label: "설치 유형",
+      label: "설치장소 유형",
       options: [
         ["floating", "수상 (댐·저수지 수면)"],
         ["plant", "정수장 부지"],
         ["basin", "침전지 상부"],
-        ["land", "육상"],
+        ["land", "지상 (평지/경사지)"],
+        ["rooftop", "건축물 (지붕·옥상)"],
       ],
     },
     { key: "latitude", label: "위도", step: 0.00001 },
@@ -605,6 +659,7 @@ export function CandidateForm({
       label: "수심 · 별도 조사값",
       unit: "m",
       step: 0.1,
+      show: () => !land,
     },
     {
       key: "water_level_m",
@@ -612,7 +667,17 @@ export function CandidateForm({
       label: "수위 · 별도 조사값",
       unit: "m",
       step: 0.1,
+      show: () => !land,
     },
+    { key: "boundary_setback_m", label: "경계 이격 · 사용자 설계값", unit: "m", step: 0.1, show: () => land },
+    { key: "shading_loss_pct", label: "추가 음영손실 · 시스템 손실과 별도", unit: "%", step: 0.1 },
+    { key: "terrain_slope_deg", label: "부지 경사 · 조사값", unit: "°", step: 0.1, required: false, show: () => value.site_type === "land" },
+    { key: "slope_limit_deg", label: "경사 검토 한계 · 사용자 가정", unit: "°", step: 0.1, show: () => value.site_type === "land" },
+    { key: "roof_mount", label: "지붕 설치 방식", options: [["rack", "가대형 (독립 경사·방위)"], ["flush", "지붕 밀착형 (지붕 경사·방위 적용)"]], show: () => value.site_type === "rooftop" },
+    { key: "roof_tilt_deg", label: "지붕 경사", unit: "°", step: 0.1, show: () => value.site_type === "rooftop" && value.roof_mount === "flush" },
+    { key: "roof_azimuth_deg", label: "지붕 방위 · 정남 180°", unit: "°", step: 0.1, show: () => value.site_type === "rooftop" && value.roof_mount === "flush" },
+    { key: "roof_allowable_load_kg_m2", label: "지붕 허용 추가하중 · 구조 검토값", unit: "kg/m²", step: 0.1, required: false, show: () => value.site_type === "rooftop" },
+    { key: "roof_system_load_kg_m2", label: "설치 추가하중 · 모듈·가대·밸러스트", unit: "kg/m²", step: 0.1, required: false, show: () => value.site_type === "rooftop" },
   ];
   const shift = (poly: { type: "Polygon"; coordinates: number[][][] }, k: string, delta: number) => ({
     ...poly,
@@ -643,7 +708,8 @@ export function CandidateForm({
         values={Object.fromEntries(
           fields.map((f) => [
             f.key,
-            (value as unknown as Settings)[f.key] ?? "",
+            (value as unknown as Settings)[f.key] ?? ({ boundary_setback_m: 0, shading_loss_pct: 0, slope_limit_deg: 15,
+              roof_mount: "rack", roof_tilt_deg: 10, roof_azimuth_deg: 180 } as Settings)[f.key] ?? "",
           ]),
         )}
         onChange={(k, v) => {
@@ -656,10 +722,11 @@ export function CandidateForm({
           setValue(next);
         }}
       />
+      <CandidateWeather candidate={value} />
       {value.source && <p className="hint">출처: {value.source}</p>}
       <p className="hint">
-        비워 둔 수심·수위·거리는 ‘미확인’으로 저장됩니다. 좌표를 바꾸면 경계도
-        함께 이동합니다.
+        {land ? "경계는 수평 투영 면적입니다. 비워 둔 조사값은 미확인으로 저장됩니다. 이격·경사 한계·하중은 사용자 설계·조사값이며 법정 기준을 자동 판정하지 않습니다. 좌표를 바꾸면 경계도 함께 이동합니다."
+          : "비워 둔 수심·수위·거리는 ‘미확인’으로 저장됩니다. 좌표를 바꾸면 경계도 함께 이동합니다."}
       </p>
       <button className="btn primary block" type="submit">
         후보지 저장

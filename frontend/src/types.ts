@@ -1,7 +1,9 @@
 export type Polygon = { type: "Polygon"; coordinates: number[][][] };
-export type SiteType = "floating" | "plant" | "basin" | "land";
+export type SiteType = "floating" | "plant" | "basin" | "land" | "rooftop";
+export type TerrainMode = "floating" | "land";
 export type Candidate = {
   id: string;
+  solartech_asset_id?: string;
   project_id: string;
   name: string;
   latitude: number;
@@ -14,6 +16,15 @@ export type Candidate = {
   water_depth_m: number | null;
   water_level_m: number | null;
   site_type: SiteType;
+  boundary_setback_m?: number;
+  shading_loss_pct?: number;
+  terrain_slope_deg?: number | null;
+  slope_limit_deg?: number;
+  roof_mount?: "rack" | "flush";
+  roof_tilt_deg?: number;
+  roof_azimuth_deg?: number;
+  roof_allowable_load_kg_m2?: number | null;
+  roof_system_load_kg_m2?: number | null;
   reference_plant_id: string | null;
   source: string;
 };
@@ -43,6 +54,7 @@ export type Project = {
   status?: string;
 };
 export type Economics = {
+  net_profit?: number;
   capex: number;
   annual_opex: number;
   first_year_sales_kwh: number;
@@ -121,6 +133,13 @@ export type CostItem = {
   source: string;
 };
 export type Result = {
+  sizing?: SizingPreview | null;
+  weather_station?: WeatherSelection | null;
+  orientation_comparison?: { label: string; tilt: number; azimuth: number; annual_kwh: number; difference_pct: number }[];
+  orientation_basis?: string;
+  price_scenarios?: { price_per_kwh: number; annual_revenue: number; npv: number; payback_years: number | null; net_profit: number }[];
+  revenue_monthly?: { month: number; generation_kwh: number; sales_kwh: number; self_use_kwh: number; revenue: number }[];
+  financial_assumptions?: { label: string; value: number; unit: string; source: string }[];
   capacity_dc_kw: number;
   capacity_ac_kw: number;
   annual_kwh: number;
@@ -166,6 +185,7 @@ export type Result = {
       seismic_coeff_g: number;
       structural_basis: string;
       site_type: SiteType;
+      conditions?: Pick<Candidate, "boundary_setback_m" | "shading_loss_pct" | "terrain_slope_deg" | "slope_limit_deg" | "roof_mount" | "roof_tilt_deg" | "roof_azimuth_deg" | "roof_allowable_load_kg_m2" | "roof_system_load_kg_m2">;
       structure_type: "fixed" | "seasonal";
       tilt: number;
       azimuth: number;
@@ -306,6 +326,8 @@ export type Result = {
     usable_area_m2: number;
     coverage_pct: number;
     modules: Polygon[];
+    /** Set when a very large site's module outlines were not stored. */
+    modules_omitted?: boolean;
     warnings: string[];
   } | null;
   reference?: {
@@ -350,6 +372,7 @@ export type Workspace = {
   runs: Run[];
 };
 export type Catalog = {
+  site_defaults?: Partial<Record<SiteType, Catalog["defaults"]>>;
   defaults: {
     equipment: Settings;
     costs: Settings;
@@ -425,6 +448,8 @@ export type WaterSearch = {
   attribution: string;
   warning: string | null;
 };
+/** Layers the map can search for candidates: reservoirs, open land, large roofs. */
+export type FindKind = "water" | "land" | "building";
 export type Plant = {
   id: string;
   name: string;
@@ -532,6 +557,30 @@ export type KmaStation = {
   latitude: number | null;
   longitude: number | null;
   coordinate_basis: string;
+  source?: string;
+  has_observations?: boolean;
+};
+export type WeatherSelection = {
+  nearest: KmaStation & { distance_km: number };
+  selected: (KmaStation & { distance_km: number }) | null;
+  basis: string;
+  selection_basis: string;
+  coordinate_source: string;
+  coordinate_date: string;
+  profile: { period: string; source: string; months: { month: number; ghi_kwh_m2_day: number; temp_air: number; days: number }[] } | null;
+};
+export type SizingPreview = {
+  legacy: boolean;
+  minimum_modules?: number;
+  module_count?: number;
+  capacity_kw?: number;
+  target_capacity_kw?: number | null;
+  site_area_m2?: number | null;
+  reserve_pct?: number;
+  pitch?: { gap_m: number; pitch_m: number; plan_depth_m: number; basis: string };
+  module?: { manufacturer: string; model: string; power_w: number; width_m: number; height_m: number; source: string };
+  basis: string;
+  warnings?: string[];
 };
 export type WeatherCheck = {
   irradiance: {

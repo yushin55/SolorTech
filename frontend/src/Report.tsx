@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { date, num } from "./api";
 import { MonthlyEnergyChart, ReviewSteps, Term, Verdict } from "./Steps";
 import type { Run } from "./types";
+import { FinancialAssumptions, OrientationComparison, RevenueDetails, SizingDetails, WeatherDetails } from "./Feasibility";
 
 const eok = (won: number | null | undefined, digits = 1) =>
   won == null ? "—" : `${num(won / 100000000, digits)}억 원`;
@@ -19,9 +20,10 @@ function Section({ n, title, children }: { n: number; title: string; children: R
 }
 
 /** A short, centred review document; full calculation detail lives in the appendix. */
-export default function ReportBody({ run, appendix }: { run: Run; appendix: ReactNode }) {
+export default function ReportBody({ run, appendix, outdated = false }: { run: Run; appendix: ReactNode; outdated?: boolean }) {
   const result = run.result!;
   const { site, equipment, costs, revenue } = result.steps;
+  const land = site.site_type !== "floating";
   const e = result.economics;
   const cal = result.calibration && result.energy_basis === "calibrated" ? result.calibration : null;
   const kpis: [ReactNode, string, string?][] = [
@@ -36,7 +38,7 @@ export default function ReportBody({ run, appendix }: { run: Run; appendix: Reac
     ["CO₂ 감축", `${num(result.steps.substitution.co2_t, 0)} t/년`, `${num(result.steps.substitution.households, 0)}가구 전력`],
   ];
   const steps: [string, string][] = [
-    ["① 설치대상지", `${site.province} ${site.nearest_city} · ${site.structure_type === "seasonal" ? "가변형" : `고정형 ${site.tilt}°`} · 정남향 · 설계풍속 ${site.wind_speed_ms} m/s`],
+    ["① 설치대상지", `${site.province} ${site.nearest_city} · ${site.structure_type === "seasonal" ? "가변형" : `고정형 ${site.tilt}°`} · 방위 ${site.azimuth}° · 설계풍속 ${site.wind_speed_ms} m/s`],
     ["② 기자재", `${equipment.module.module_power_w} W × ${num(equipment.module_count)}장 = ${num(result.capacity_dc_kw, 0)} kW · 인버터 ${equipment.inverter.units.map((u) => `${u.model ? u.model + " " : ""}${u.kw} kW×${u.count}`).join(" + ")} · ${equipment.grid.voltage}`],
     ["③ 발전량", `연 ${num(result.annual_kwh / 1000, 0)} MWh · ${result.physics.years.length}년 기상(${result.physics.years[0]}~${result.physics.years.at(-1)}) · ${cal ? "운영실적 보정" : "물리 모델"}`],
     ["④ 공사비", `${eok(costs.total)} · 연 유지관리 ${num(costs.annual_om / 10000)}만 원`],
@@ -46,20 +48,21 @@ export default function ReportBody({ run, appendix }: { run: Run; appendix: Reac
   const assumed = costs.items.filter((item) => item.source.includes("가정"));
   const checks = [
     ...(assumed.length ? [`${assumed.map((item) => item.label).join("·")} 단가는 가이드라인에 없는 가정값입니다. 실제 견적으로 바꿔 다시 분석하세요.`] : []),
-    ...result.provenance.warnings.filter((w) => !w.startsWith("개략 모듈 배치")).slice(0, 4),
-    "인허가, 계통 접속 가능 용량, 구조·계류 안전성은 별도 확인이 필요합니다.",
+    ...result.provenance.warnings.filter((w) => !w.startsWith("개략 모듈 배치")),
+    land ? "인허가, 계통 접속 가능 용량, 지형·기초·지붕 구조 안전성은 별도 확인이 필요합니다." : "인허가, 계통 접속 가능 용량, 구조·계류 안전성은 별도 확인이 필요합니다.",
   ];
   return (
     <article className="report">
+      {outdated && <p className="inline-warning">현재 입력 조건이 분석 시점과 다릅니다. 이 보고서는 아래 분석 스냅샷의 이전 조건으로 계산한 결과입니다. 최신 조건은 다시 분석해야 합니다.</p>}
       <header className="report-title">
-        <span className="report-kicker">수상태양광 사전 사업성 검토 보고서</span>
+        <span className="report-kicker">{land ? "육상·건축물 태양광" : "수상태양광"} 사전 사업성 검토 보고서</span>
         <h1>{run.snapshot.candidate.name}</h1>
         <p>
           {run.snapshot.design.name} · {run.snapshot.project.name}
         </p>
         <div className="report-details">
           <span>분석일 {date(run.created_at)}</span>
-          <span>기준: K-water 표준설계모델 가이드라인</span>
+          <span>기준: {land ? "육상·건축물 현장 조건 + 공통 기자재·재무 산식" : "K-water 표준설계모델 가이드라인"}</span>
           <span>{cal ? "발전량: K-water 운영실적 보정" : "발전량: 물리 모델"}</span>
         </div>
       </header>
@@ -85,6 +88,8 @@ export default function ReportBody({ run, appendix }: { run: Run; appendix: Reac
         <p className="hint">
           막대는 {cal ? "운영실적으로 보정한 발전량과 검증 오차 범위" : "물리 모델 발전량"}, 선은 보정 전 물리 모델입니다(단위 MWh).
         </p>
+        <OrientationComparison result={result} />
+        <RevenueDetails result={result} />
       </Section>
 
       <Section n={4} title="가이드라인 6단계 요약">
@@ -130,6 +135,9 @@ export default function ReportBody({ run, appendix }: { run: Run; appendix: Reac
       </Section>
 
       <Section n={6} title="공사비 구성">
+        {result.weather_station && <WeatherDetails value={result.weather_station} />}
+        {result.sizing && <SizingDetails value={result.sizing} />}
+        <FinancialAssumptions result={result} />
         <div className="cost-bars">
           {costs.items
             .filter((item) => item.amount > 0)
@@ -178,7 +186,7 @@ export default function ReportBody({ run, appendix }: { run: Run; appendix: Reac
       </details>
 
       <footer className="report-bottom">
-        수면 · 수상태양광 사업성 검토
+        SolarTech · 태양광 사업성 검토
         <span>사전 검토용 자료이며 설치 확정·투자 수익 보장이 아닙니다.</span>
       </footer>
     </article>

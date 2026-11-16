@@ -273,6 +273,9 @@ def resolve_equipment(equipment, factors):
     resolved = dict(equipment)
     preset = MODULES.get(resolved.get("module_preset")) or catalog.MODULES.get(resolved.get("module_preset"))
     if preset:
+        resolved["module_model"] = preset["label"]
+        resolved["module_manufacturer"] = preset.get("manufacturer", "미지정 (가이드라인 예시)")
+        resolved["module_source"] = preset["source"]
         for key in ("module_power_w", "module_width_m", "module_height_m", "module_price"):
             resolved[key] = preset[key]
     if resolved.get("module_preset") in catalog.MODULES:
