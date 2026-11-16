@@ -290,6 +290,10 @@ export type Result = {
       } | null;
     };
     equipment: {
+      inverter_efficiency?: number;
+      electrical_assumptions?: Record<string, number>;
+      electrical_source?: string | null;
+      inverter_catalog?: CatalogInverter | null;
       module: {
         module_model: string;
         module_power_w: number;
@@ -325,12 +329,13 @@ export type Result = {
         warnings: string[];
       };
       inverter: {
-        units: { kw: number; count: number; unit_cost: number }[];
+        units: { kw: number; count: number; unit_cost: number; model?: string }[];
         ac_capacity_kw: number;
         cost: number;
         rule: string;
         junction_boxes: { inverter_kw: number; channels: number; count: number }[];
         junction_box_count: number;
+        requires_combiner?: boolean;
         basis: string;
       };
       grid: {
@@ -428,12 +433,50 @@ export type Workspace = {
   designs: Design[];
   runs: Run[];
 };
+export type CatalogInverter = {
+  id: string;
+  manufacturer: string;
+  model: string;
+  kw: number;
+  max_kva?: number;
+  rating?: string;
+  max_efficiency_pct: number;
+  euro_efficiency_pct: number | null;
+  max_efficiency_qualifier?: string;
+  certified_efficiency_pct?: number;
+  mppt: number | string;
+  channels: number | null;
+  fuse_a?: string;
+  weight_kg: number | string;
+  size_mm: string;
+  features: string[];
+  unit_cost: number;
+  price_basis: string;
+  source: string;
+  warranty: string | null;
+  requires_combiner?: boolean;
+  mppt_min_v?: number;
+  mppt_max_v?: number;
+  full_power_mppt_min_v?: number;
+  max_dc_voltage_v?: number;
+  startup_voltage_v?: number;
+  nominal_dc_voltage_v?: number;
+  max_input_current_a?: number;
+  max_short_circuit_current_a?: number;
+  max_dc_input_power_w?: number;
+  max_pv_capacity_kwp?: number | null;
+  ac_voltage_v?: number;
+  ac_frequency_hz?: number;
+  max_ac_current_a?: number;
+  warnings?: string[];
+};
 export type Catalog = {
   defaults: {
     equipment: Settings;
     costs: Settings;
     finance: FinanceSettings;
   };
+  inverters?: CatalogInverter[];
   modules: {
     id: string;
     label: string;
@@ -445,6 +488,8 @@ export type Catalog = {
     source: string;
     source_url?: string;
     price_source?: string;
+    thickness_mm?: number;
+    missing_electrical?: string[];
     use?: string;
     vmp_v?: number;
     voc_v?: number;

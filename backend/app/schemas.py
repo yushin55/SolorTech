@@ -90,7 +90,8 @@ class Equipment(StrictModel):
     tilt_mode: Literal["guideline", "manual"] = "guideline"
     tilt: float = Field(default=30, ge=0, le=90)
     azimuth: float = Field(default=180, ge=90, le=270)
-    module_preset: Literal["floating_450", "land_480", "qcells_xl_g11s_590", "hdhes_t440nf", "custom"] = "floating_450"
+    module_preset: Literal["floating_450", "land_480", "qcells_xl_g11s_590", "hdhes_t440nf",
+                           "senergy_sl85_66hdx_730u", "ls_pvm_s350f4b", "lg_lg340s2w_w4", "custom"] = "floating_450"
     module_manufacturer: str = Field(default="", max_length=120)
     module_model: Name = "수상용 단결정 450 Wp (가이드라인 표 3-9)"
     module_source: str = Field(default="", max_length=300)
@@ -113,6 +114,7 @@ class Equipment(StrictModel):
     spacing_mode: Literal["guideline", "manual"] = "guideline"
     row_spacing_m: float = Field(default=1.2, ge=0, le=100)
     inverter_configuration: Literal["auto", "multi", "single"] = "auto"
+    inverter_model: Literal["guideline", "dass_dsp_33125kshk_nj1"] = "guideline"
     purpose: Literal["sale", "self"] = "sale"
     gamma_pdc: float = Field(default=-0.0035, ge=-0.02, le=0)
     inverter_efficiency: float = Field(default=0.96, ge=.5, le=1)
@@ -134,6 +136,8 @@ class Costs(StrictModel):
     grid_connection: NonNegative = 60000000
     annual_om_per_kw: NonNegative = 27000
     replacement_year: int = Field(default=12, ge=1, le=50)
+    module_unit_price: NonNegative = 0
+    inverter_unit_price: NonNegative = 0
 
 
 class Finance(StrictModel):

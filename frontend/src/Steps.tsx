@@ -329,15 +329,15 @@ export function ReviewSteps({
             ],
             [
               "인버터",
-              equipment.inverter.units.map((u) => `${u.kw} kW × ${u.count}대`).join(" + "),
+              equipment.inverter.units.map((u) => `${u.model ? u.model + " " : ""}${u.kw} kW × ${u.count}대`).join(" + "),
               `${equipment.inverter.rule} · AC ${num(equipment.inverter.ac_capacity_kw)} kW`,
             ],
             [
               "접속반",
-              equipment.inverter.junction_boxes
+              equipment.inverter.requires_combiner ? "외부 접속반 필요 · 수량·비용 별도 견적" : equipment.inverter.junction_boxes
                 .map((j) => `${j.channels}CH × ${j.count}면`)
                 .join(" + "),
-              "표 3-14 인버터 용량별 채널수",
+              equipment.inverter.requires_combiner ? "접속반 비용 자동 미산정" : "표 3-14 인버터 용량별 채널수",
             ],
             [
               "계통연계",
@@ -346,6 +346,10 @@ export function ReviewSteps({
             ],
           ]}
         />
+        {equipment.electrical_source && <p className="hint">{equipment.electrical_source}</p>}
+        {equipment.electrical_assumptions && Object.keys(equipment.electrical_assumptions).length > 0 &&
+          <p className="inline-warning">미제공 모듈 제원의 계산 입력: {Object.entries(equipment.electrical_assumptions).map(([key, value]) => `${key}=${value}`).join(" · ")}</p>}
+        {equipment.inverter_catalog && <p className="hint">{equipment.inverter_catalog.model} · 계산용 효율 {num((equipment.inverter_efficiency ?? .96) * 100, 2)}% (유로효율 미확인 · 사용자 가정)</p>}
         {equipment.strings.warnings.map((w, i) => (
           <p className="inline-warning" key={i}>
             {w}

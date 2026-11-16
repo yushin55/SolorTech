@@ -19,8 +19,9 @@ from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
 from . import calibration, generation, kma, kwater, solartech, stations, weather
-from .engine import siting, guideline
+from .engine import catalog, siting, guideline
 from .geocoding import search_places
+from .legacy_data import readable
 from .seed import seed_candidates
 from .sitefinder import find_sites
 from .waterbodies import find_water_bodies
@@ -52,7 +53,7 @@ def find(repo, kind, identifier):
     item = repo.get(kind, identifier)
     if item is None:
         raise HTTPException(404, "자료를 찾을 수 없습니다.")
-    return item
+    return readable(kind, item)
 
 
 def project_summary(repo, project):
@@ -246,6 +247,7 @@ def create_app(repository=None, seed=None):
     def catalogs():
         values = defaults()
         return {"modules": [{"id": key, **value} for key, value in guideline.MODULES.items()],
+                "inverters": [{"id": key, **value} for key, value in catalog.INVERTERS.items()],
                 "inverter_units": [{"kw": kw, "unit_cost": cost, "junction": guideline.JUNCTION[kw]}
                                    for kw, cost in guideline.INVERTER_UNITS.items()],
                 "string_example": guideline.STRING_EXAMPLE, "guideline": guideline.SOURCE, "defaults": values}
@@ -557,8 +559,8 @@ def create_app(repository=None, seed=None):
                                                    if key != "modules"}
             runs.append(summary)
         return {"project": project_summary(repo, project),
-                "candidates": [item for item in repo.list("candidates") if item["project_id"] == identifier],
-                "designs": [item for item in repo.list("designs") if item["project_id"] == identifier], "runs": runs}
+                "candidates": [readable("candidates", item) for item in repo.list("candidates") if item["project_id"] == identifier],
+                "designs": [readable("designs", item) for item in repo.list("designs") if item["project_id"] == identifier], "runs": runs}
 
     @app.post("/api/projects/{identifier}/candidates", status_code=201)
     def create_candidate(identifier: str, payload: CandidateCreate, request: Request):

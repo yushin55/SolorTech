@@ -7,6 +7,7 @@ those stay user-entered cost assumptions in the design inputs.
 
 import math
 
+from . import catalog
 from .common import integer, number
 
 SOURCE = "K-water 태양광에너지 표준설계모델 가이드라인"
@@ -43,6 +44,8 @@ MODULES = {
                      "source_url": "https://ussolarsupplier.com/cdn/shop/files/SPEC_HiS-T440NF_BK__USSS.pdf",
                      "price_source": "단가 미공개 → 가이드라인 표 3-9 W당 500원 적용 가정", "use": "building"},
 }
+
+MODULES.update(catalog.MODULES)
 
 # 표 3-13 example (480 Wp): Vmp 44.81 V, Voc 53.61 V, voltage coefficient −0.27 %/°C.
 STRING_EXAMPLE = {"vmp_v": 44.81, "voc_v": 53.61, "voltage_temp_coeff_pct": -.27}
@@ -192,11 +195,15 @@ def string_design(module_count, electrical):
         return value - (25 - temperature) * value * coeff
 
     cold_vmp, cold_voc, hot_vmp, hot_voc = at(vmp, T_MIN_C), at(voc, T_MIN_C), at(vmp, T_MAX_C), at(voc, T_MAX_C)
-    maximum = min(math.floor(MPPT_MAX_V / cold_vmp), math.floor(VOC_MAX_V / cold_voc))
-    minimum = max(math.ceil(MPPT_MIN_V / hot_vmp), math.ceil(MPPT_MIN_V / hot_voc))
+    inverter = catalog.INVERTERS.get(electrical.get("inverter_model"), {})
+    mppt_min = inverter.get("full_power_mppt_min_v", inverter.get("mppt_min_v", MPPT_MIN_V))
+    mppt_max = inverter.get("mppt_max_v", MPPT_MAX_V)
+    voc_max = inverter.get("max_dc_voltage_v", VOC_MAX_V)
+    maximum = min(math.floor(mppt_max / cold_vmp), math.floor(voc_max / cold_voc))
+    minimum = max(math.ceil(mppt_min / hot_vmp), math.ceil(mppt_min / hot_voc))
     warnings = []
     if minimum > maximum:
-        raise ValueError(f"모듈 전압으로 인버터 MPPT {MPPT_MIN_V:.0f}~{MPPT_MAX_V:.0f} V를 만족하는 직렬 수가 없습니다.")
+        raise ValueError(f"모듈 전압으로 인버터 MPPT 설계 범위 {mppt_min:.0f}~{mppt_max:.0f} V를 만족하는 직렬 수가 없습니다.")
     series = (minimum + maximum) // 2
     parallel = module_count // series
     if parallel < 1:
@@ -208,13 +215,36 @@ def string_design(module_count, electrical):
     return {"series": series, "parallel": parallel, "modules_used": series * parallel,
             "series_min": minimum, "series_max": maximum,
             "cold_vmp_v": cold_vmp, "cold_voc_v": cold_voc, "hot_vmp_v": hot_vmp, "hot_voc_v": hot_voc,
-            "string_voc_v": voc * series, "basis": "표 3-13 직렬회로수 산정식 (−30°C·70°C, MPPT 550~830 V, Voc 1,000 V)",
+            "string_voc_v": voc * series,
+            "basis": f"표 3-13 직렬회로수 산정식 (−30°C·70°C, MPPT {mppt_min:g}~{mppt_max:g} V, Voc {voc_max:,.0f} V)" +
+                     (f" · {inverter['model']} 정격출력 MPPT 범위 적용" if inverter.get("full_power_mppt_min_v") else ""),
             "electrical_source": electrical.get("electrical_source", "가이드라인 480 Wp 예시 제원"),
             "warnings": warnings}
 
 
-def inverter_design(dc_kw, configuration="auto"):
+def catalog_inverter_design(dc_kw, model_id, configuration="auto", parallel=None):
+    """One catalog string-inverter model, enough units for AC ≥ DC (표 3-12 sizing rule)."""
+    model = catalog.INVERTERS[model_id]
+    count = max(1, math.ceil(dc_kw / model["kw"] - 1e-9))
+    rule = f"카탈로그 {model['model']}: AC 용량 ≥ DC 용량이 되는 최소 대수"
+    if configuration == "multi" and count < 2:
+        count, rule = 2, f"카탈로그 {model['model']}: 멀티구성 (사용자 선택, 최소 2대)"
+    warnings = []
+    warnings += model.get("warnings", [])
+    if not model.get("requires_combiner") and model["channels"] and parallel and parallel > model["channels"] * count:
+        warnings.append(f"직렬군 {parallel}개 > {model['model']} 입력 채널 {model['channels']}CH × {count}대: "
+                        "대수를 늘리거나 접속반이 필요합니다.")
+    return {"units": [{"kw": model["kw"], "count": count, "unit_cost": model["unit_cost"], "model": model["model"]}],
+            "ac_capacity_kw": float(model["kw"] * count), "unit_count": count, "cost": model["unit_cost"] * count,
+            "rule": rule, "model_id": model_id, "junction_boxes": [], "junction_box_count": 0,
+            "requires_combiner": model.get("requires_combiner", False),
+            "basis": f"{model['source']} 제원 · {model['price_basis']}", "warnings": warnings}
+
+
+def inverter_design(dc_kw, configuration="auto", model_id=None, parallel=None):
     """표 3-12: multi-unit (≥2) at least cost unless one unit saves more than 20 %."""
+    if model_id in catalog.INVERTERS:
+        return catalog_inverter_design(dc_kw, model_id, configuration, parallel)
     options = []
     # Within the table's 1 MW range multi-unit rows combine only 100/500 kW units;
     # 1,000 kW units appear there only as the single-unit option.
@@ -284,6 +314,12 @@ def resolve_equipment(equipment, factors):
                         module_source=preset["source"], module_price_source=preset["price_source"])
     else:
         resolved.setdefault("module_price_source", "사용자 입력")
+    if preset and preset.get("missing_electrical"):
+        labels = {"vmp_v": "Vmp", "voc_v": "Voc", "voltage_temp_coeff_pct": "전압 온도계수", "gamma_pdc": "출력 온도계수"}
+        resolved["electrical_source"] = preset["source"] + " · " + "·".join(labels[key] for key in preset["missing_electrical"]) + " 미제공: 설계 입력값 사용 (초기값은 가이드라인 가정)"
+    model = catalog.INVERTERS.get(resolved.get("inverter_model"))
+    if model and model.get("euro_efficiency_pct") is not None:
+        resolved["inverter_efficiency"] = model["euro_efficiency_pct"] / 100
     if resolved.get("tilt_mode", "guideline") == "guideline":
         resolved["tilt"] = factors["optimal_tilt"]
     if resolved.get("structure_type") == "seasonal":

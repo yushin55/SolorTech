@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { AngleRow, CapacityPlan, Candidate, Catalog, Design, Settings } from "./types";
+import type { AngleRow, CapacityPlan, Candidate, Catalog, CatalogInverter, Design, Settings } from "./types";
 import { SITE_TYPE_OPTIONS } from "./types";
 import { api, num } from "./api";
 export type FieldDef = {
@@ -115,6 +115,9 @@ const notFloating = (v: Settings) =>
   v.site_type !== "floating" ? "설치장소 유형이 ‘수상’일 때만 입력" : false;
 // ④ 개략공사비 (부록 2.5) — 현금 유출
 const costs: FieldDef[] = [
+  { key: "module_unit_price", label: "모듈 견적 단가 (0 = 카탈로그 가정)", unit: "원/장", source: "견적", required: false },
+  { key: "inverter_unit_price", label: "인버터 견적 단가 (0 = 환산 단가)", unit: "원/대", source: "견적", required: false,
+    show: (v) => v.inverter_model === "dass_dsp_33125kshk_nj1" },
   { key: "float_per_kw", label: "부유체", unit: "원/kW", source: "견적 가정", disabled: notFloating },
   { key: "mooring_per_kw", label: "계류장치", unit: "원/kW", source: "견적 가정", disabled: notFloating },
   {
@@ -278,6 +281,7 @@ type Modules = Catalog["modules"];
 export type DesignContext = {
   candidate?: Candidate | null;
   modules?: Modules;
+  inverters?: CatalogInverter[];
   /** Angle comparison of the latest analysis of this design, if any. */
   angles?: { rows: AngleRow[]; selected: { tilt: number; azimuth: number } } | null;
   /** Latest analysed tilt (guideline-resolved) for the comparison readout. */
@@ -448,6 +452,7 @@ function ModulePicker({
             <dt>크기 (가로×세로)</dt>
             <dd>
               {num(preset.module_width_m * 1000, 0)} × {num(preset.module_height_m * 1000, 0)} mm
+              {preset.thickness_mm != null && <> · 두께 {preset.thickness_mm} mm</>}
             </dd>
           </div>
           <div>
@@ -476,8 +481,46 @@ function ModulePicker({
           onChange={(k, v) => onChange({ ...eq, [k]: v })}
         />
       )}
+      {preset?.missing_electrical?.length ? <>
+        <p className="inline-warning">Vmp·Voc·전압 온도계수{preset.gamma_pdc == null ? "·출력 온도계수" : ""} 미제공: 아래 고급 입력의 값은 계산 가정입니다. 이 제품의 확인된 제원과 구분해 수정하세요. 무게·허용하중·수상 적용성도 미확인입니다.</p>
+        {preset.gamma_pdc != null && <p className="hint">제공된 출력 온도계수: {num(preset.gamma_pdc * 100, 3)} %/°C</p>}
+      </> : null}
     </div>
   );
+}
+
+function InverterPicker({ equipment, inverters, onChange }: {
+  equipment: Settings; inverters: CatalogInverter[]; onChange: (equipment: Settings) => void;
+}) {
+  const selected = inverters.find((i) => i.id === equipment.inverter_model);
+  return <div className="module-picker">
+    <label className="field full"><span>인버터 기종</span>
+      <select aria-label="인버터 기종" value={String(equipment.inverter_model || "guideline")}
+        onChange={(e) => onChange({ ...equipment, inverter_model: e.target.value })}>
+        <option value="guideline">가이드라인 100·500·1,000 kW 조합</option>
+        {inverters.map((i) => <option key={i.id} value={i.id}>{i.manufacturer} · {i.model} · {i.kw} kW</option>)}
+      </select>
+    </label>
+    {selected && <>
+      <dl className="module-spec">
+        <div><dt>정격 출력</dt><dd>{selected.rating || `${selected.kw} kW`}</dd></div>
+        <div><dt>MPPT / DC 입력</dt><dd>{selected.mppt} / {selected.channels}채널 · 외부 접속반 필요</dd></div>
+        <div><dt>최대 / 유로효율</dt><dd>{selected.max_efficiency_pct}% {selected.max_efficiency_qualifier} / 유로효율 미확인</dd></div>
+        <div><dt>인증서 효율</dt><dd>{selected.certified_efficiency_pct}% (유로효율로 사용 안 함)</dd></div>
+        <div><dt>최대 DC 전압</dt><dd>{num(selected.max_dc_voltage_v)} V</dd></div>
+        <div><dt>MPPT 동작 / 정격출력</dt><dd>{selected.mppt_min_v}~{selected.mppt_max_v} V / {selected.full_power_mppt_min_v}~{selected.mppt_max_v} V</dd></div>
+        <div><dt>기동 / 정격 DC 전압</dt><dd>{selected.startup_voltage_v} / {selected.nominal_dc_voltage_v} V</dd></div>
+        <div><dt>최대 입력 / 단락전류</dt><dd>{selected.max_input_current_a} / {selected.max_short_circuit_current_a} A (MPPT당)</dd></div>
+        <div><dt>최대 DC 입력전력</dt><dd>{num(selected.max_dc_input_power_w)} W · 허용 어레이 kWp 미확인</dd></div>
+        <div><dt>최대 AC 전류</dt><dd>{selected.max_ac_current_a} A</dd></div>
+        <div><dt>크기 / 무게</dt><dd>{selected.size_mm} mm / {selected.weight_kg} kg</dd></div>
+        <div><dt>단가 (가정)</dt><dd>{num(selected.unit_cost)}원/대</dd></div>
+        <div className="wide"><dt>출처</dt><dd>{selected.source}</dd></div>
+      </dl>
+      <p className="hint">유로효율이 없어 고급 입력의 계산용 효율을 사용합니다. 초기 96%는 가정이며 인증서 97.61%와 다릅니다. {selected.price_basis}</p>
+      {selected.warnings?.map((warning) => <p className="inline-warning" key={warning}>{warning}</p>)}
+    </>}
+  </div>;
 }
 
 function AngleReadout({ ctx, eq }: { ctx: DesignContext; eq: Settings }) {
@@ -533,6 +576,16 @@ export function DesignEditor({
   const [tab, setTab] = useState<Tab>("equipment");
   const eq = design.equipment;
   const siteType = context.candidate?.site_type ?? "floating";
+  const moduleSpec = context.modules?.find((m) => m.id === eq.module_preset);
+  const checkedElectricalFields = electricalFields.map((field) => {
+    if (moduleSpec?.missing_electrical && ["vmp_v", "voc_v", "voltage_temp_coeff_pct", "gamma_pdc"].includes(field.key)) {
+      return { ...field, show: () => moduleSpec.missing_electrical!.includes(field.key), source: "미제공 · 계산 가정" };
+    }
+    if (field.key === "inverter_efficiency" && eq.inverter_model === "dass_dsp_33125kshk_nj1") {
+      return { ...field, label: "계산용 인버터 효율 · 유로효율 미확인", source: "사용자 가정" };
+    }
+    return field;
+  });
   const setGroup = (key: "equipment" | "costs" | "finance", k: string, v: unknown) =>
     onChange({
       ...design,
@@ -626,9 +679,10 @@ export function DesignEditor({
               <CapacityPreview design={design} candidate={context.candidate} />
             </fieldset>
             <Fields fields={layoutFields} values={eq} onChange={(k, v) => setGroup("equipment", k, v)} />
+            <InverterPicker equipment={eq} inverters={context.inverters ?? []} onChange={(equipment) => onChange({ ...design, equipment })} />
             <details className="advanced">
               <summary>전기 사양·발전량 모델 (고급)</summary>
-              <Fields fields={electricalFields} values={eq} onChange={(k, v) => setGroup("equipment", k, v)} />
+              <Fields fields={checkedElectricalFields} values={eq} onChange={(k, v) => setGroup("equipment", k, v)} />
             </details>
           </>
         )}
@@ -648,7 +702,7 @@ export function DesignEditor({
           <>
             <Fields
               fields={costs}
-              values={{ ...design.costs, site_type: siteType }}
+              values={{ module_unit_price: 0, inverter_unit_price: 0, ...design.costs, site_type: siteType, inverter_model: eq.inverter_model || "guideline" }}
               onChange={(k, v) => setGroup("costs", k, v)}
             />
             <p className="hint">

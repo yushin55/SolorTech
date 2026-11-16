@@ -566,6 +566,7 @@ function DesignStep(p: WizardProps) {
           context={{
             candidate: p.candidate,
             modules: p.catalog?.modules ?? [],
+            inverters: p.catalog?.inverters ?? [],
             angles: p.activeRun?.result?.steps.site.angles ?? null,
             analysedTilt: p.activeRun?.result?.steps.site.tilt,
             requiredPrice: p.activeRun?.result?.economics.required_price_per_kwh ?? null,

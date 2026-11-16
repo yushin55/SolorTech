@@ -9,7 +9,7 @@ validated on K-water operating records.
 import math
 
 from .. import calibration, kma, stations, weather
-from . import guideline, siting
+from . import catalog, guideline, siting
 from .common import ENGINE_VERSION, integer, number
 from .energy import long_term_energy, orientation_poa
 from .finance import calculate_finance
@@ -99,13 +99,31 @@ COST_CATEGORY = {"module": "설비(모듈)", "inverter": "설비(인버터)", "j
                  "design": "설계·인허가", "grid": "계통연계"}
 
 
+def _apply_quotes(equipment, costs, inverter):
+    """Quoted unit prices from step ④ replace guideline / converted catalog prices."""
+    module_quote = number(costs, "module_unit_price", default=0, minimum=0)
+    if module_quote:
+        equipment["module_price"] = module_quote
+    equipment["module_price_source"] = (
+        "사용자 견적" if module_quote else
+        catalog.MODULES[equipment["module_preset"]]["price_basis"] if equipment.get("module_preset") in catalog.MODULES else
+        equipment.get("module_price_source", "사용자 입력"))
+    inverter_quote = number(costs, "inverter_unit_price", default=0, minimum=0)
+    if inverter.get("model_id") and inverter_quote:
+        inverter["units"][0]["unit_cost"] = inverter_quote
+        inverter["cost"] = inverter_quote * inverter["unit_count"]
+    inverter["price_source"] = (
+        "사용자 견적" if inverter.get("model_id") and inverter_quote else
+        "카탈로그 · 표 3-12 kW당 단가 환산 (견적 가정)" if inverter.get("model_id") else "가이드라인 표 3-12")
+
+
 def _costs(equipment, costs, dc_kw, inverter, distance, floating):
     items = [
         ("module", "태양광 모듈", equipment["module_count"] * number(equipment, "module_price", minimum=0),
          f"{equipment['module_count']:,}장 × {number(equipment, 'module_price', minimum=0):,.0f}원",
          equipment.get("module_price_source", "가이드라인 표 3-9")),
         ("inverter", "인버터", inverter["cost"],
-         " + ".join(f"{unit['kw']} kW × {unit['count']}대" for unit in inverter["units"]), "가이드라인 표 3-12"),
+         " + ".join(f"{unit.get('model', '')} {unit['kw']} kW × {unit['count']}대".strip() for unit in inverter["units"]), inverter.get("price_source", "가이드라인 표 3-12")),
     ]
     junction = number(costs, "junction_box_unit", default=0, minimum=0)
     if junction:
@@ -164,6 +182,9 @@ def run_analysis(snapshot):
     factors = guideline.site_factors(latitude, longitude)
     equipment, pitch, site_warnings = siting.resolve(candidate, design["equipment"], factors)
     warnings += site_warnings
+    module_spec = catalog.MODULES.get(equipment.get("module_preset"))
+    if module_spec:
+        warnings += [equipment["electrical_source"], "선택 모듈의 무게·허용하중·수상 적용성은 제공 표에서 미확인입니다."]
     equipment["albedo"] = .06 if floating else .2
 
     # ② 부지면적·기자재 → 설치 용량
@@ -173,14 +194,16 @@ def run_analysis(snapshot):
     strings = design_strings(plan, equipment)
     equipment["module_count"] = strings["modules_used"]
     dc_kw = equipment["module_count"] * equipment["module_power_w"] / 1000
-    inverter = guideline.inverter_design(dc_kw, equipment.get("inverter_configuration", "auto"))
+    inverter = guideline.inverter_design(dc_kw, equipment.get("inverter_configuration", "auto"),
+                                         equipment.get("inverter_model"), strings["parallel"])
     equipment["ac_capacity_kw"] = inverter["ac_capacity_kw"]
+    _apply_quotes(equipment, costs, inverter)
     purpose = equipment.get("purpose", "sale")
     grid = guideline.grid_connection(dc_kw, purpose)
     layout = _place(candidate, equipment, pitch, equipment["module_count"]) if probe else None
     if layout is None and plan["mode"] not in ("site_area", "capacity"):
         warnings.append("후보지 경계가 없어 지도 배치 검토를 생략했습니다(기존 발전소 재현 검토).")
-    warnings += strings["warnings"]
+    warnings += strings["warnings"] + inverter.get("warnings", [])
 
     # ③ 연간 발전량: 물리 모델 + 운영실적 보정
     years = snapshot.get("weather", {}).get("years") or weather.long_term_years()
@@ -265,6 +288,10 @@ def run_analysis(snapshot):
                 "module": {key: equipment[key] for key in ("module_model", "module_power_w", "module_width_m",
                                                             "module_height_m", "module_price")},
                 "module_preset": equipment.get("module_preset"),
+                "inverter_catalog": catalog.INVERTERS.get(equipment.get("inverter_model")),
+                "inverter_efficiency": equipment.get("inverter_efficiency", .96),
+                "electrical_assumptions": {key: equipment[key] for key in (module_spec or {}).get("missing_electrical", [])},
+                "electrical_source": equipment.get("electrical_source"),
                 "area_m2": probe["area_m2"] if probe else None,
                 "usable_area_m2": probe["usable_area_m2"] if probe else None,
                 "max_modules_by_area": maximum, "requested_modules": requested, "plan": plan,
@@ -301,6 +328,12 @@ def run_analysis(snapshot):
         "필요 판매단가 = 유출 현재가치 ÷ 할인 판매전력량 (B/C = 1이 되는 단가). 입찰가 결정이 아닌 후보지 비교용입니다.",
         distance_basis,
     ]
+    if module_spec:
+        assumptions.append(equipment["electrical_source"] + " · 계산 입력 " +
+                           ", ".join(f"{key}={equipment[key]}" for key in module_spec["missing_electrical"]))
+    inverter_spec = catalog.INVERTERS.get(equipment.get("inverter_model"))
+    if inverter_spec:
+        assumptions.append(f"{inverter_spec['model']} 유로효율 미확인: 계산용 효율 {equipment['inverter_efficiency'] * 100:g}%는 사용자 입력 가정입니다. 인증서 97.61%와 구분합니다.")
     if shading:
         assumptions.append(f"주변 장애물 음영 손실 {shading:g}%를 월별 발전량에 일괄 반영했습니다(사용자 입력 가정).")
     if use_calibrated:
@@ -405,7 +438,7 @@ def _assumption_table(equipment, costs, finance, plan, floating, distance, inver
         ("설비", "모듈 크기(가로×세로)", f"{equipment['module_width_m']:.3f} × {equipment['module_height_m']:.3f}", "m",
          "모듈 제원 출처와 같음"),
         ("설비", "모듈 단가", equipment["module_price"], "원/장", equipment.get("module_price_source", user)),
-        ("설비", "인버터 구매비", inverter["cost"], "원", "가이드라인 표 3-12"),
+        ("설비", "인버터 구매비", inverter["cost"], "원", inverter.get("price_source", "가이드라인 표 3-12")),
         ("배치", "용량 산정 방식", plan["mode_label"], "", user),
         ("배치", "어레이 행 피치(모듈 깊이+이격)", round(plan["row_pitch_m"], 2), "m", plan.get("pitch_basis") or "가이드라인 표 3-22"),
         ("배치", "모듈 1장당 점유면적", round(plan["module_footprint_m2"], 2), "m²/장", "모듈 폭 × 행 피치 ÷ 어레이 단수"),
@@ -465,7 +498,8 @@ def period_model_rows(run, years):
     snapshot, result = run["snapshot"], run["result"]
     candidate = snapshot["candidate"]
     steps = result["steps"]
-    equipment = {**snapshot["design"]["equipment"], "tilt": steps["site"]["tilt"],
+    resolved, _, _ = siting.resolve(candidate, snapshot["design"]["equipment"], steps["site"])
+    equipment = {**resolved, "tilt": steps["site"]["tilt"],
                  "module_count": steps["equipment"]["module_count"], "ac_capacity_kw": result["capacity_ac_kw"],
                  **{key: steps["equipment"]["module"][key] for key in ("module_power_w", "module_width_m", "module_height_m")},
                  "azimuth": steps["site"].get("azimuth", snapshot["design"]["equipment"].get("azimuth", 180)),
