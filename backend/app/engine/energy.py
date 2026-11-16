@@ -107,7 +107,8 @@ def simulate(equipment, latitude, longitude, frame, durations):
     night = zenith >= 90
     poa = np.maximum(np.asarray(irradiance["poa_global"]), 0)
     poa[night] = 0
-    temperature_parameters = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["sapm"]["open_rack_glass_glass"]
+    temperature_parameters = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["sapm"][
+        equipment.get("temperature_model", "open_rack_glass_glass")]
     cell_temperature = pvlib.temperature.sapm_cell(
         poa, frame.temp_air.to_numpy(), frame.wind_speed.to_numpy(), **temperature_parameters)
     aoi = pvlib.irradiance.aoi(tilt, azimuth, zenith, sun_azimuth)
@@ -118,6 +119,7 @@ def simulate(equipment, latitude, longitude, frame, durations):
     effective[night] = 0
     pdc_w = pvlib.pvsystem.pvwatts_dc(effective, cell_temperature, dc_kw * 1000, gamma)
     pdc_w = np.maximum(np.asarray(pdc_w), 0) * (1 - loss)
+    pdc_w *= 1 - number(equipment, "shading_loss_pct", default=0, minimum=0, maximum=100) / 100
     if ac_kw > 0:
         # PVWatts inverter pdc0 means AC nameplate / nominal efficiency.
         pac_w = pvlib.inverter.pvwatts(pdc_w, ac_kw * 1000 / efficiency, eta_inv_nom=efficiency)

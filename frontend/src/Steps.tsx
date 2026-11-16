@@ -1,5 +1,6 @@
-import { Children, createContext, useContext, useState } from "react";
+import { Children } from "react";
 import type { ReactElement, ReactNode } from "react";
+import { Check } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -16,7 +17,8 @@ import {
   YAxis,
 } from "recharts";
 import { num } from "./api";
-import type { Result, Run } from "./types";
+import { FinancialAssumptions, OrientationComparison, RevenueDetails, SizingDetails, WeatherDetails } from "./Feasibility";
+import type { Candidate, Catalog, Design, Financing, Result, Run } from "./types";
 
 // Validated categorical order (dataviz validator: all checks pass on white).
 export const series = ["#2563eb", "#0d9488", "#d97706"];
@@ -33,6 +35,7 @@ const SITE_TYPE: Record<string, string> = {
   plant: "정수장 부지",
   basin: "침전지 상부",
   land: "육상",
+  rooftop: "건축물 (지붕·옥상)",
 };
 const SEASON: Record<string, string> = {
   spring: "봄",
@@ -60,10 +63,179 @@ export function Term({ name, children }: { name: keyof typeof GLOSSARY | string;
   );
 }
 
-// Steps open by default; the others show only their one-line summary.
-const OPEN_STEPS = new Set(["energy", "finance"]);
-// The printable report expands every step.
-const ExpandAll = createContext(false);
+export type StepId = "site" | "equipment" | "energy" | "costs" | "revenue" | "finance";
+/** The review wizard walks the guideline's six steps in order, like a sign-up flow. */
+export const WIZARD_STEPS: { id: StepId; label: string; title: string; description: string }[] = [
+  {
+    id: "site",
+    label: "설치대상지 선정",
+    title: "① 설치대상지 선정",
+    description: "검토할 후보지(수상·지상·건축물)를 고르거나 지도에서 새로 찾아 추가합니다. 경계·제외 구역·연결점도 여기서 지정합니다.",
+  },
+  {
+    id: "equipment",
+    label: "부지·기자재",
+    title: "② 부지면적 및 기자재 기술사양",
+    description: "설계 대안을 고르거나 추가하고, 구조물·경사각과 모듈·인버터 조건을 정합니다.",
+  },
+  {
+    id: "energy",
+    label: "설치용량·발전량",
+    title: "③ 설치용량 및 연간발전량",
+    description: "분석을 실행해 후보지 위치의 30년 실제 기상으로 설치용량과 연간 발전량을 계산합니다.",
+  },
+  {
+    id: "costs",
+    label: "개략공사비",
+    title: "④ 개략공사비",
+    description: "가이드라인 단가와 견적 가정으로 총 공사비를 산정합니다. ‘견적 가정’ 항목은 실제 견적으로 바꾸세요.",
+  },
+  {
+    id: "revenue",
+    label: "예상수익",
+    title: "⑤ 예상수익",
+    description: "판매 단가 방식과 단가를 정해 1년차 수익을 확인합니다.",
+  },
+  {
+    id: "finance",
+    label: "재무성 분석",
+    title: "⑥ 재무성 분석 및 에너지 대체효과",
+    description: "사업기간·할인율로 B/C, NPV, IRR과 발전량이 줄었을 때의 B/C를 확인하고 결론을 냅니다.",
+  },
+];
+/** Numbered progress indicator; steps beyond `reachable` stay locked. */
+export function Stepper({
+  current,
+  reachable,
+  onSelect,
+}: {
+  current: number;
+  reachable: number;
+  onSelect: (index: number) => void;
+}) {
+  return (
+    <ol className="stepper" aria-label="가이드라인 6단계">
+      {WIZARD_STEPS.map((s, i) => {
+        const state = i === current ? "current" : i < current ? "done" : "todo";
+        return (
+          <li key={s.id} className={state}>
+            <button
+              type="button"
+              disabled={i > reachable}
+              aria-current={i === current ? "step" : undefined}
+              onClick={() => onSelect(i)}
+            >
+              <span className="stepper-dot">
+                {state === "done" ? <Check size={18} strokeWidth={2.5} aria-hidden="true" /> : i + 1}
+              </span>
+              <span className="stepper-label">{s.label}</span>
+            </button>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/**
+ * Site + design summary that stays above every wizard step, so the reviewer
+ * keeps the 후보지·설비 context while editing costs or finance. Values come
+ * from the latest analysis when it matches the inputs, otherwise from inputs.
+ */
+export function ReviewOverview({
+  candidate,
+  design,
+  catalog,
+  result,
+  status,
+}: {
+  candidate: Candidate | null;
+  design: Design | null;
+  catalog: Catalog | null;
+  /** Completed result for the current inputs (null when absent or stale). */
+  result: Result | null;
+  status: "none" | "pending" | "stale" | "done";
+}) {
+  const eq = design?.equipment;
+  const module = catalog?.modules.find((m) => m.id === eq?.module_preset);
+  const inverter = catalog?.inverters?.find((i) => i.id === eq?.inverter_model);
+  const steps = result?.steps;
+  const power = Number(eq?.module_preset === "custom" ? eq?.module_power_w : (module?.module_power_w ?? eq?.module_power_w));
+  const inputKw = eq?.capacity_mode !== "area" && eq ? (Number(eq.module_count) * power) / 1000 : null;
+  const area = steps?.equipment.area_m2;
+  const rows: [string, ReactNode, string?][] = [
+    [
+      "후보지",
+      candidate?.name ?? "—",
+      steps ? `${steps.site.province} ${steps.site.nearest_city} · ${SITE_TYPE[steps.site.site_type] ?? ""}` : candidate ? SITE_TYPE[candidate.site_type] : undefined,
+    ],
+    [
+      candidate?.site_type === "floating" ? "수면 면적" : "부지·지붕 면적",
+      area != null ? `${num(area / 10000, 1)} ha` : candidate && !candidate.geometry ? "경계 없음" : "—",
+      steps?.equipment.usable_area_m2 != null ? `이용 가능 ${num(steps.equipment.usable_area_m2 / 10000, 1)} ha` : undefined,
+    ],
+    [
+      "설계 대안",
+      design?.name ?? "—",
+      eq ? (eq.structure_type === "seasonal" ? "가변형 · 계절별 경사" : steps ? `고정형 · ${steps.site.tilt}°` : "고정형") : undefined,
+    ],
+    [
+      "설비용량",
+      result ? `${num(result.capacity_dc_kw, 1)} kW` : inputKw ? `${num(inputKw, 1)} kW` : "—",
+      result ? `AC ${num(result.capacity_ac_kw)} kW` : inputKw ? "입력값 · 분석 전" : undefined,
+    ],
+    [
+      "모듈",
+      steps ? `${num(steps.equipment.module_count)}장` : eq?.capacity_mode !== "area" && eq ? `${num(Number(eq.module_count))}장` : "—",
+      module?.label ?? (eq?.module_model ? String(eq.module_model) : undefined),
+    ],
+    [
+      "인버터",
+      steps
+        ? steps.equipment.inverter.units.map((u) => `${u.kw} kW×${u.count}`).join(" + ")
+        : inverter
+          ? `${inverter.manufacturer} ${inverter.model}`
+          : "가이드라인 원칙",
+      steps ? `${steps.equipment.strings.series}직렬 × ${num(steps.equipment.strings.parallel)}병렬` : undefined,
+    ],
+    [
+      "계통연계",
+      steps?.equipment.grid.voltage ?? "—",
+      candidate?.cable_distance_m != null
+        ? `연계거리 ${num(candidate.cable_distance_m)} m`
+        : candidate?.grid_point && result
+          ? `연결점까지 직선 ${num(result.cable_distance_m)} m`
+          : "연결점 미입력",
+    ],
+    [
+      "연간 발전량",
+      result ? `${num(result.annual_kwh / 1000, 0)} MWh` : "—",
+      result ? `B/C ${num(result.economics.bc, 2)} · 필요단가 ${num(result.economics.required_price_per_kwh, 0)}원` : undefined,
+    ],
+  ];
+  const label = { none: "분석 결과 없음", pending: "분석 계산 중", stale: "조건 변경됨", done: "최신 결과 반영" }[status];
+  return (
+    <details className="card overview" open>
+      <summary>
+        <h3>검토 개요</h3>
+        <span className={`status ${status === "done" ? "done" : status === "pending" ? "pending" : status === "stale" ? "stale" : ""}`}>
+          {label}
+        </span>
+      </summary>
+      <dl>
+        {rows.map(([k, v, note]) => (
+          <div key={k}>
+            <dt>{k}</dt>
+            <dd>
+              {v}
+              {note && <small>{note}</small>}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </details>
+  );
+}
 
 type StepProps = {
   id: string;
@@ -74,7 +246,7 @@ type StepProps = {
 };
 function Step({ id, title, source, summary, children }: StepProps) {
   return (
-    <details className="card step" id={`step-${id}`} open={useContext(ExpandAll) || OPEN_STEPS.has(id)}>
+    <details className="card step" id={`step-${id}`} open>
       <summary>
         <div className="card-heading">
           <h3>{title}</h3>
@@ -96,12 +268,14 @@ export function Verdict({ result }: { result: Result }) {
   const p10 = result.stress.find((s) => s.label.includes("P10"));
   const bc = e.bc ?? 0;
   const robust = result.stress.every((s) => (s.bc ?? 0) >= 1);
-  const tone: Tone = bc >= 1 && robust ? "good" : bc >= 1 ? "warn" : "bad";
+  const land = result.steps.site.site_type !== "floating";
+  const siteChecks = land ? result.provenance.warnings.filter((w) => /부지 경사|지붕|배치 가능한/.test(w)) : [];
+  const tone: Tone = bc >= 1 && robust && !siteChecks.length ? "good" : bc >= 1 ? "warn" : "bad";
   const headline =
     tone === "good"
       ? "사업성이 확인됩니다"
       : tone === "warn"
-        ? "기준 조건에서는 사업성이 있지만, 발전량이 줄면 위험합니다"
+        ? siteChecks.length ? "수익 조건과 함께 현장·구조 조건 확인이 필요합니다" : "기준 조건에서는 사업성이 있지만, 발전량이 줄면 위험합니다"
         : "현재 조건에서는 사업성이 부족합니다";
   const margin =
     e.required_price_per_kwh == null
@@ -116,6 +290,7 @@ export function Verdict({ result }: { result: Result }) {
         <h2>{headline}</h2>
       </div>
       <ul>
+        {siteChecks.map((warning) => <li key={warning}>{warning}</li>)}
         <li>
           연간 <b>{num(result.annual_kwh / 1000, 0)} MWh</b> 발전이 예상됩니다
           {cal && result.energy_basis === "calibrated" ? (
@@ -166,6 +341,91 @@ function Facts({ rows }: { rows: [string, ReactNode, string?][] }) {
         </div>
       ))}
     </dl>
+  );
+}
+
+type EquipmentResult = Result["steps"]["equipment"];
+function ModuleLoads({ loads }: { loads: NonNullable<EquipmentResult["module_loads"]> }) {
+  const check = (load: number, rating: number, ok: boolean) =>
+    `${num(load)} Pa / 허용 ${num(rating)} Pa · ${ok ? `여유 ${num(rating / load, 1)}배` : "초과"}`;
+  return (
+    <div className="module-loads">
+      <h4>모듈 하중 검토</h4>
+      <Facts
+        rows={[
+          [
+            "부유체 상재 하중",
+            `${num(loads.total_weight_kg / 1000, 1)} t`,
+            `${num(loads.weight_kg, 1)} kg × ${num(loads.module_count)}장 · 모듈 면적당 ${num(loads.weight_per_m2, 1)} kg/㎡ (부유체 견적 근거)`,
+          ],
+          [
+            "풍하중",
+            <span className={loads.wind_ok ? "load-ok" : "load-fail"}>{loads.wind_ok ? "적합" : "부적합"}</span>,
+            `최대풍속 ${loads.wind_speed_ms} m/s 속도압 ${check(loads.wind_pressure_pa, loads.wind_rating_pa, loads.wind_ok)}`,
+          ],
+          [
+            "적설하중",
+            <span className={loads.snow_ok ? "load-ok" : "load-fail"}>{loads.snow_ok ? "적합" : "부적합"}</span>,
+            `지상적설하중 ${check(loads.snow_load_pa, loads.snow_rating_pa, loads.snow_ok)}`,
+          ],
+        ]}
+      />
+      <p className="hint">
+        허용하중: {loads.rating_basis}. {loads.basis}
+      </p>
+    </div>
+  );
+}
+function ModuleComparison({
+  comparison,
+}: {
+  comparison: NonNullable<EquipmentResult["module_comparison"]>;
+}) {
+  const area = comparison.usable_area_m2 != null;
+  return (
+    <div className="module-comparison">
+      <h4>모듈별 같은 후보지 설치 비교</h4>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>모듈</th>
+              <th>출력</th>
+              <th>배열 간격</th>
+              <th>1,000㎡당 용량</th>
+              {area && <th>최대 설치</th>}
+              <th>모듈 단가</th>
+            </tr>
+          </thead>
+          <tbody>
+            {comparison.items.map((m) => (
+              <tr key={m.id} className={m.selected ? "active" : undefined}>
+                <th>
+                  {m.label}
+                  {m.selected && <span className="tag">선택</span>}
+                </th>
+                <td>{num(m.module_power_w)} Wp</td>
+                <td>{num(m.pitch_m, 2)} m</td>
+                <td>{num(m.kw_per_1000m2, 1)} kW</td>
+                {area && (
+                  <td>
+                    {num(m.max_kw ?? 0, 1)} kW ({num(m.max_modules ?? 0)}장)
+                  </td>
+                )}
+                <td>
+                  {num(m.price_per_kw / 10000, 1)}만 원/kW
+                  {m.price_source.includes("가정") && <span className="tag assumed">견적 가정</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="hint">
+        {comparison.basis}
+        {area ? ` · 이용 가능 면적 ${num(comparison.usable_area_m2! / 10000, 2)} ha 기준` : " · 후보지 경계가 없어 면적당 값만 비교"}
+      </p>
+    </div>
   );
 }
 
@@ -221,21 +481,36 @@ export function MonthlyEnergyChart({ result }: { result: Result }) {
   );
 }
 
-export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: boolean }) {
+/** Every guideline step, fully expanded (printable report appendix). */
+export function ReviewSteps({ run }: { run: Run }) {
   const result = run.result!;
+  return (
+    <div className="stack">
+      {guidelineSteps(result)}
+      {result.reference && <ReferenceBacktest reference={result.reference} />}
+    </div>
+  );
+}
+/** One step's computed detail, shown inside the review wizard. */
+export function StepResult({ run, id }: { run: Run; id: StepId }) {
+  const step = guidelineSteps(run.result!).find((s) => s.props.id === id)!;
+  const { source, summary, children } = step.props;
+  return (
+    <section className="card step-detail" aria-label={`${step.props.title} 산정 결과`}>
+      <div className="card-heading">
+        <h3>산정 결과</h3>
+        {source && <span className="source-chip">{source}</span>}
+      </div>
+      {summary && <p className="step-summary">{summary}</p>}
+      {children}
+    </section>
+  );
+}
+function guidelineSteps(result: Result) {
   const { site, equipment, costs, revenue, substitution } = result.steps;
   const e = result.economics;
   const cal = result.calibration;
-  // Short label and headline number per step for the board view.
-  const highlights: Record<string, [string, string]> = {
-    site: ["설치대상지", site.structure_type === "seasonal" ? "가변형" : `고정형 ${site.tilt}°`],
-    equipment: ["기자재·용량", `${num(result.capacity_dc_kw, 0)} kW`],
-    energy: ["연간 발전량", `${num(result.annual_kwh / 1000, 0)} MWh`],
-    costs: ["개략공사비", `${num(costs.total / 100000000, 1)}억 원`],
-    revenue: ["예상수익", `${num(revenue.first_year_revenue / 100000000, 2)}억/년`],
-    finance: ["재무성", `B/C ${num(e.bc, 2)}`],
-  };
-  const steps = Children.toArray(
+  return Children.toArray(
     (
       <>
       <Step
@@ -244,7 +519,7 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
         source="가이드라인 3.5 · 표 3-4·3-18~3-21"
         summary={
           <>
-            {site.province} {site.nearest_city} 권역 · 정남향{" "}
+            {site.province} {site.nearest_city} 권역 · 방위 {site.azimuth}°{" "}
             {site.structure_type === "seasonal" ? "가변형(계절별 경사 조정)" : `고정형 ${site.tilt}°`} ·
             풍속 {site.wind_speed_ms} m/s 기준으로 설계합니다.
           </>
@@ -273,6 +548,20 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
             ["지진구역", `${site.seismic_zone} · ${site.seismic_coeff_g}g`],
           ]}
         />
+        {site.site_type !== "floating" && site.conditions && <>
+          <h4>육상·건축물 현장 조건</h4>
+          <Facts rows={[
+            ["경계 이격", `${num(site.conditions.boundary_setback_m ?? 0, 1)} m`, "사용자 설계값 · 경계에서 안쪽으로 차감"],
+            ["추가 음영손실", `${num(site.conditions.shading_loss_pct ?? 0, 1)}%`, "시스템 손실과 별도 곱 적용"],
+            ...(site.site_type === "land" ? [["부지 경사 / 검토 한계", `${site.conditions.terrain_slope_deg == null ? "미확인" : `${num(site.conditions.terrain_slope_deg, 1)}°`} / ${num(site.conditions.slope_limit_deg ?? 15, 1)}°`, "사용자 조사·가정 · 법정 기준 아님"] as [string, ReactNode, string]] : []),
+            ...(site.site_type === "rooftop" ? [
+              ["지붕 설치 방식", site.conditions.roof_mount === "flush" ? "지붕 밀착형" : "가대형"] as [string, ReactNode],
+              ["허용 / 설치 추가하중", `${site.conditions.roof_allowable_load_kg_m2 == null ? "미확인" : num(site.conditions.roof_allowable_load_kg_m2, 1)} / ${site.conditions.roof_system_load_kg_m2 == null ? "미확인" : num(site.conditions.roof_system_load_kg_m2, 1)} kg/m²`, "구조 검토값 · 모듈·가대·밸러스트 포함"] as [string, ReactNode, string],
+            ] : []),
+          ]} />
+          {result.provenance.warnings.map((warning) => <p className="hint" key={warning}>{warning}</p>)}
+        </>}
+        {result.weather_station && <WeatherDetails value={result.weather_station} />}
         {site.climate && <ClimateCheck climate={site.climate} />}
       </Step>
       <Step
@@ -283,14 +572,15 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
           <>
             {equipment.module.module_power_w} W 모듈 {num(equipment.module_count)}장 ={" "}
             <b>{num(result.capacity_dc_kw, 1)} kW</b>, 인버터{" "}
-            {equipment.inverter.units.map((u) => `${u.kw} kW×${u.count}`).join(" + ")}, {equipment.grid.voltage} 연계.
+            {equipment.inverter.units.map((u) => `${u.model ? u.model + " " : ""}${u.kw} kW×${u.count}`).join(" + ")},{" "}
+            {equipment.grid.voltage} 연계.
           </>
         }
       >
         <Facts
           rows={[
             [
-              "수면 면적",
+              site.site_type === "floating" ? "수면 면적" : "부지·지붕 면적",
               equipment.area_m2 == null
                 ? "경계 없음"
                 : `${num(equipment.area_m2 / 10000, 2)} ha`,
@@ -301,7 +591,10 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
             [
               "모듈",
               `${equipment.module.module_model}`,
-              `${num(equipment.module.module_width_m * 1000)} × ${num(equipment.module.module_height_m * 1000)} mm · ${num(equipment.module.module_price)}원/장`,
+              `${num(equipment.module.module_width_m * 1000)} × ${num(equipment.module.module_height_m * 1000)} mm · ${num(equipment.module.module_price)}원/장` +
+                (equipment.module_catalog
+                  ? ` · ${equipment.module_catalog.source}, 효율 ${equipment.module_catalog.efficiency_pct}% · 단가 견적 가정`
+                  : ""),
             ],
             [
               "어레이 이격",
@@ -315,15 +608,26 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
             ],
             [
               "인버터",
-              equipment.inverter.units.map((u) => `${u.kw} kW × ${u.count}대`).join(" + "),
-              `${equipment.inverter.rule} · AC ${num(equipment.inverter.ac_capacity_kw)} kW`,
+              equipment.inverter.units
+                .map((u) => `${u.model ? u.model + " " : ""}${u.kw} kW × ${u.count}대`)
+                .join(" + "),
+              `${equipment.inverter.rule} · AC ${num(equipment.inverter.ac_capacity_kw)} kW` +
+                (equipment.inverter_catalog
+                  ? ` · 유로효율 ${equipment.inverter_catalog.euro_efficiency_pct}% · 단가 견적 가정`
+                  : ""),
             ],
             [
               "접속반",
-              equipment.inverter.junction_boxes
-                .map((j) => `${j.channels}CH × ${j.count}면`)
-                .join(" + "),
-              "표 3-14 인버터 용량별 채널수",
+              equipment.inverter_catalog
+                ? equipment.inverter_catalog.channels
+                  ? `인버터 입력 ${equipment.inverter_catalog.channels}CH × ${num(equipment.inverter.units[0].count)}대`
+                  : `${equipment.inverter_catalog.mppt} MPPT × ${num(equipment.inverter.units[0].count)}대`
+                : equipment.inverter.junction_boxes
+                    .map((j) => `${j.channels}CH × ${j.count}면`)
+                    .join(" + "),
+              equipment.inverter_catalog
+                ? "스트링 인버터 직접 입력 · 표 3-14 접속반 미적용"
+                : "표 3-14 인버터 용량별 채널수",
             ],
             [
               "계통연계",
@@ -332,6 +636,9 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
             ],
           ]}
         />
+        {result.sizing && <SizingDetails value={result.sizing} />}
+        {equipment.module_loads && <ModuleLoads loads={equipment.module_loads} />}
+        {equipment.module_comparison && <ModuleComparison comparison={equipment.module_comparison} />}
         {equipment.strings.warnings.map((w, i) => (
           <p className="inline-warning" key={i}>
             {w}
@@ -344,7 +651,7 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
         source={`${result.physics.years[0]}~${result.physics.years.at(-1)} ERA5 시간자료`}
         summary={
           <>
-            {result.physics.years.length}년 실제 기상으로 계산하면 연간 <b>{num(result.annual_kwh / 1000, 0)} MWh</b>
+            {result.physics.years.length}년 기상 시간분포로 계산하면 연간 <b>{num(result.annual_kwh / 1000, 0)} MWh</b>
             {result.energy_basis === "calibrated"
               ? ` (운영실적 보정 후, 보정 전 물리 모델보다 ${num((1 - result.annual_kwh / result.physics.annual_kwh) * 100, 1)}% 낮음)`
               : " (물리 모델 단독)"}
@@ -375,6 +682,7 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
           </div>
         </div>
         <MonthlyEnergyChart result={result} />
+        <OrientationComparison result={result} />
         <p className="hint">
           {cal && result.energy_basis === "calibrated"
             ? `${cal.model_label} · 오차 막대는 ${cal.band_basis}(발전소 ${cal.band_plants}곳)의 월별 P10–P90입니다. 장소 분리 검증 월 MAPE ${num(cal.validation.all.mape_pct, 1)}%${cal.validation.floating ? `, 수상 ${num(cal.validation.floating.mape_pct, 1)}%` : ""}.`
@@ -461,6 +769,8 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
             ["1년차 수익", `${num(revenue.first_year_revenue / 10000)} 만 원`],
           ]}
         />
+        <RevenueDetails result={result} />
+        <FinancialAssumptions result={result} />
       </Step>
       <Step
         id="finance"
@@ -501,7 +811,7 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
           </div>
           <div>
             <span>
-              <Term name="필요 판매단가" /> (B/C = 1)
+              <Term name="필요 판매단가" /> (B/C = 1 · LCOE)
             </span>
             <strong>
               {num(e.required_price_per_kwh, 1)}
@@ -510,6 +820,12 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
             <small>현재 단가 {num(e.effective_price_per_kwh, 1)} 원/kWh</small>
           </div>
         </div>
+        {e.financing && (
+          <FinancingView
+            financing={e.financing}
+            replacementYears={e.cashflows.filter((c) => c.replacement > 0).map((c) => c.year)}
+          />
+        )}
         <h4>발전량이 예상보다 낮을 때</h4>
         <div className="table-scroll">
           <table>
@@ -594,6 +910,17 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
               {num(substitution.co2_t, 1)}
               <small>tCO₂</small>
             </strong>
+            {result.annual_kwh > 0 && (
+              <small>
+                {e.cashflows.length - 1}년 누적{" "}
+                {num(
+                  (substitution.co2_t * e.cashflows.reduce((s, c) => s + c.generation_kwh, 0)) /
+                    result.annual_kwh,
+                  0,
+                )}{" "}
+                tCO₂ (열화 반영)
+              </small>
+            )}
           </div>
         </div>
         <p className="hint">{substitution.basis}</p>
@@ -601,61 +928,95 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
       </>
     ).props.children,
   ) as ReactElement<StepProps>[];
-  const reference = result.reference ? <ReferenceBacktest reference={result.reference} /> : null;
-  if (expandAll)
-    return (
-      <ExpandAll.Provider value>
-        <div className="stack">
-          {steps}
-          {reference}
-        </div>
-      </ExpandAll.Provider>
-    );
-  return <StepBoard steps={steps} highlights={highlights} reference={reference} />;
 }
-
-/** Six step cards in one row; only the selected step's detail is shown. */
-function StepBoard({
-  steps,
-  highlights,
-  reference,
-}: {
-  steps: ReactElement<StepProps>[];
-  highlights: Record<string, [string, string]>;
-  reference: ReactNode;
-}) {
-  const [active, setActive] = useState("energy");
-  const current = steps.find((step) => step.props.id === active) ?? steps[0];
-  const { title, source, summary, children } = current.props;
+/** Equity-side view when the design assumes a loan (PF 융자). */
+function FinancingView({ financing: f, replacementYears }: { financing: Financing; replacementYears: number[] }) {
+  const debtYears = f.schedule.filter((r) => r.debt_service > 0);
+  const shortYears = debtYears.filter((r) => r.dscr != null && r.dscr < 1).map((r) => r.year);
+  const onlyReplacement = shortYears.length > 0 && shortYears.every((y) => replacementYears.includes(y));
   return (
-    <div className="stack">
-      <div className="step-board" role="tablist" aria-label="가이드라인 6단계">
-        {steps.map((step, index) => {
-          const [label, value] = highlights[step.props.id];
-          return (
-            <button
-              key={step.props.id}
-              role="tab"
-              aria-selected={step.props.id === active}
-              className={step.props.id === active ? "active" : ""}
-              onClick={() => setActive(step.props.id)}
-            >
-              <span className="step-no">{index + 1}</span>
-              <span className="step-label">{label}</span>
-              <b>{value}</b>
-            </button>
-          );
-        })}
-      </div>
-      <section className="card step-detail" role="tabpanel" aria-label={title}>
-        <div className="card-heading">
-          <h3>{title}</h3>
-          {source && <span className="source-chip">{source}</span>}
+    <div className="financing">
+      <h4>
+        자금 조달 시 자기자본 수익성 <span className="tag assumed">사용자 가정</span>
+      </h4>
+      <div className="metrics">
+        <div>
+          <span>자기자본 / 융자</span>
+          <strong>
+            {won(f.equity)}
+            <small> / {won(f.loan_amount)} 억 원</small>
+          </strong>
+          <small>
+            융자 {num(f.loan_pct, 0)}% · 연 {num(f.loan_rate_pct, 1)}% · 거치 {f.grace_years}년 + 상환 {f.loan_years}년
+          </small>
         </div>
-        {summary && <p className="step-summary">{summary}</p>}
-        {children}
-      </section>
-      {reference}
+        <div>
+          <span>자기자본 IRR · 회수기간</span>
+          <strong>
+            {num(f.equity_irr_pct, 2)}
+            <small>% · {f.equity_payback_years == null ? "회수 안 됨" : `${num(f.equity_payback_years, 1)}년`}</small>
+          </strong>
+        </div>
+        <div>
+          <span>연간 원리금 상환</span>
+          <strong>
+            {num(f.annual_debt_service / 10000)}
+            <small>만 원</small>
+          </strong>
+          <small>총 이자 {won(f.total_interest)}억 원</small>
+        </div>
+        <div>
+          <span>
+            최소 <abbr title="원리금상환비율 = 그해 사업 순현금흐름 ÷ 원리금. 1 미만이면 그해 원리금을 사업 수입으로 갚지 못합니다.">DSCR</abbr>
+          </span>
+          <strong className={f.min_dscr != null && f.min_dscr < 1 ? "load-fail" : undefined}>
+            {num(f.min_dscr, 2)}
+          </strong>
+          <small>
+            {f.min_dscr == null
+              ? "—"
+              : f.min_dscr >= 1
+                ? "모든 상환 연도 1 이상"
+                : onlyReplacement
+                  ? `${shortYears.join("·")}년차 인버터 교체 때문 · 교체 적립금 검토`
+                  : `${shortYears.join("·")}년차 1 미만`}
+          </small>
+        </div>
+      </div>
+      {debtYears.length > 0 && (
+        <details className="schedule">
+          <summary>연도별 상환 일정 ({debtYears.length}년)</summary>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>연차</th>
+                  <th>이자 (만 원)</th>
+                  <th>원금 (만 원)</th>
+                  <th>잔액 (억 원)</th>
+                  <th>DSCR</th>
+                  <th>자기자본 현금흐름 (만 원)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {debtYears.map((r) => (
+                  <tr key={r.year}>
+                    <th>{r.year}년차</th>
+                    <td>{num(r.interest / 10000)}</td>
+                    <td>{num(r.principal / 10000)}</td>
+                    <td>{won(r.balance)}</td>
+                    <td>{num(r.dscr, 2)}</td>
+                    <td>{num(r.equity_cf / 10000)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
+      <p className="hint">
+        {f.basis}. 위 B/C·NPV·IRR은 가이드라인대로 융자를 뺀 사업 전체 기준이고, 이 표는 자기자본 투자자 관점입니다.
+      </p>
     </div>
   );
 }

@@ -6,11 +6,12 @@
 * Monthly climate normals (평년값 1991–2020): temperature, humidity and
   sunshine duration — the guideline (3.5.1) asks for 30-year climate values.
 
-Station coordinates are KMA station positions where known; otherwise the
-containing city centre, labelled as such.
+Station coordinates come from the bundled official KMA ASOS table. Stations
+without verified coordinates are never selected by geographic proximity.
 """
 
 import json
+import math
 import os
 import re
 from functools import lru_cache
@@ -24,12 +25,11 @@ NORMALS_FILE = "normals_monthly.csv"
 META_FILE = "meta.json"
 MJ_TO_KWH = 1 / 3.6
 
-STATIONS = {
-    108: {"name": "서울", "latitude": 37.5714, "longitude": 126.9658,
-          "coordinate_basis": "기상청 서울 관측소(종로구 송월동)"},
-    232: {"name": "천안", "latitude": 36.8151, "longitude": 127.1139,
-          "coordinate_basis": "천안시 중심 근사(관측소 정확 좌표 아님)"},
-}
+STATION_META = json.loads((Path(__file__).parent / "resources" / "kma_stations.json").read_text(encoding="utf-8"))
+STATIONS = {item["stn"]: {k: v for k, v in item.items() if k != "stn"} for item in STATION_META["stations"]}
+OBSERVATION_DIR = Path(os.getenv("KMA_OBSERVATION_DIR", Path(__file__).resolve().parents[2] / "data" / "weather" / "asos_daily"))
+PROFILE_BASIS = ("데모 가정: 연결 관측소 일자료의 월별 일평균 일사량·기온에 맞춰 후보지 ERA5 시간분포를 조정합니다. "
+                 "DNI·DHI에도 같은 일사 비율을 적용하며, 실제 시간별 관측·30년 평년값 또는 검증된 보정 모델이 아닙니다.")
 DAILY_COLUMNS = ["date", "stn", "ta_avg", "ta_max", "ta_max_tm", "ta_min", "ta_min_tm", "hm_avg", "hm_min",
                  "hm_min_tm", "ca_tot", "ss_day", "ss_dur", "si_day", "si_60m_max"]
 
@@ -39,7 +39,7 @@ def _value(text):
     if text in ("", "-9", "-9.0", "-99.9", "-999"):
         return None
     value = float(text)
-    return None if value <= -9 else value
+    return None if value in (-9, -99, -99.9, -999, -9999) else value
 
 
 def parse_daily(path):
@@ -188,3 +188,81 @@ def climate_check(latitude, longitude, monthly, years, max_km=60):
 def station(stn):
     return {"stn": int(stn), **STATIONS.get(int(stn), {"name": f"지점 {stn}", "latitude": None,
                                                         "longitude": None, "coordinate_basis": "좌표 미상"})}
+
+
+@lru_cache(maxsize=1)
+def observation_profiles():
+    """Read STN from file contents; never infer the station from a city filename."""
+    frames = []
+    for path in sorted(OBSERVATION_DIR.glob("*.csv")):
+        frames.append(parse_daily(path))
+    if not frames:
+        return {}
+    daily = pd.concat(frames).drop_duplicates(["stn", "date"])
+    profiles = {}
+    for stn, group in daily.groupby("stn"):
+        group = group.copy()
+        group["month"] = pd.to_datetime(group.date).dt.month
+        rows = []
+        for month, data in group.groupby("month"):
+            solar = data.si_day.dropna()
+            solar = solar[solar >= 0]
+            temperature = data.ta_avg.dropna()
+            if len(solar) < 20 or len(temperature) < 20:
+                continue
+            rows.append({"month": int(month), "ghi_kwh_m2_day": float(solar.mean() * MJ_TO_KWH),
+                         "temp_air": float(temperature.mean()), "days": int(len(solar))})
+        if len(rows) == 12 and int(stn) in STATIONS:
+            profiles[int(stn)] = {"months": rows, "period": f"{group.date.min()} ~ {group.date.max()}",
+                                  "source": "기상청 ASOS 일통계 제공 CSV · 파일 본문 STN 기준"}
+    return profiles
+
+
+def distance_km(latitude, longitude, site):
+    lat1, lat2 = math.radians(latitude), math.radians(site["latitude"])
+    dlat = lat2 - lat1
+    dlon = math.radians(site["longitude"] - longitude)
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    return 6371.0088 * 2 * math.asin(math.sqrt(min(1, a)))
+
+
+def station_catalog():
+    available = observation_profiles()
+    return [{**station(stn), "has_observations": stn in available} for stn in STATIONS]
+
+
+def nearest_weather(latitude, longitude):
+    ordered = sorted(({**site, "distance_km": distance_km(latitude, longitude, site)}
+                      for site in station_catalog()), key=lambda item: (item["distance_km"], item["stn"]))
+    selected = next((site for site in ordered if site["has_observations"]), None)
+    profile = observation_profiles().get(selected["stn"]) if selected else None
+    return {"nearest": ordered[0], "selected": selected, "profile": profile,
+            "basis": PROFILE_BASIS if selected else "사용 가능한 관측소 일자료 없음 · 후보지 좌표의 ERA5 사용",
+            "selection_basis": "공식 ASOS 좌표 간 대권거리 최솟값 · 자료 연결은 월별 일사·기온 12개월 확보 관측소 중 최단거리",
+            "coordinate_source": STATION_META["source"], "coordinate_date": STATION_META["retrieved_on"]}
+
+
+def apply_station_profile(frame, selection):
+    """Demo monthly observation profile with ERA5's hourly shape; snapshot-reproducible."""
+    if not selection.get("profile"):
+        return frame, []
+    adjusted = frame.copy()
+    factors = []
+    for row in selection["profile"]["months"]:
+        mask = frame.index.month == row["month"]
+        subset = frame.loc[mask]
+        if subset.empty:
+            continue
+        # Hourly mean W/m² -> kWh/m²/day, using the actual hours present.
+        mean_daily = float(subset.ghi.mean()) * 24 / 1000
+        if mean_daily <= 0:
+            continue
+        factor = row["ghi_kwh_m2_day"] / mean_daily
+        for column in ("ghi", "dni", "dhi"):
+            adjusted.loc[mask, column] = subset[column] * factor
+        delta = row["temp_air"] - float(subset.temp_air.mean())
+        adjusted.loc[mask, "temp_air"] = subset.temp_air + delta
+        factors.append({"month": row["month"], "irradiance_factor": factor, "temperature_delta_c": delta})
+    adjusted.attrs = dict(frame.attrs)
+    adjusted.attrs["source"] = f"{frame.attrs.get('source', 'ERA5')} + 기상청 {selection['selected']['name']} 월별 관측 프로파일(데모)"
+    return adjusted, factors

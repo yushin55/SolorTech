@@ -13,8 +13,10 @@ services:
       FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-demo-solar-local}
       FIRESTORE_COLLECTION_PREFIX: ${FIRESTORE_COLLECTION_PREFIX:-solar_}
       FIRESTORE_EMULATOR_HOST: ${FIRESTORE_EMULATOR_HOST:-}
+      KMA_OBSERVATION_DIR: /weather/kma_daily
     volumes:
       - solar-data:/app/data
+      - ./data/weather/asos_daily:/weather/kma_daily:ro
     depends_on:
       firebase:
         condition: service_healthy

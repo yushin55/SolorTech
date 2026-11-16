@@ -12,10 +12,13 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "../src/App";
-import { CandidateForm } from "../src/Editors";
-import type { Candidate, Design, Run } from "../src/types";
+import { CandidateForm, DesignEditor } from "../src/Editors";
+import type { Candidate, Catalog, Design, Run, WaterBody, FindKind } from "../src/types";
 vi.mock("../src/MapView", () => ({
-  default: () => <div data-testid="map">좌표 편집 지도</div>,
+  default: ({ onAnalyzeSite }: { onAnalyzeSite?: (site: WaterBody, kind: FindKind) => Promise<void> }) => <div data-testid="map">좌표 편집 지도
+    <button onClick={() => void onAnalyzeSite?.({ id: "way/44", name: "지도에서 선택한 주택", kind: "건축물", area_m2: 90,
+      latitude: 36.5, longitude: 127, geometry: { type: "Polygon", coordinates: [[[127, 36.5], [127.0001, 36.5], [127.0001, 36.5001], [127, 36.5]]] } }, "building")}>지도 건축물 분석</button>
+  </div>,
 }));
 vi.mock("recharts", () =>
   Object.fromEntries(
@@ -295,10 +298,11 @@ function fixtureResult(d: Design) {
     },
   };
 }
-let designs: Design[], runs: Run[], clock: number;
+let designs: Design[], runs: Run[], clock: number, candidates: Candidate[];
 beforeEach(() => {
   localStorage.clear();
   clock = 0;
+  candidates = [structuredClone(original)];
   designs = [structuredClone(initial)];
   runs = [];
   const project = {
@@ -339,7 +343,7 @@ beforeEach(() => {
           runs: [],
         };
       else if (path.endsWith("/workspace"))
-        value = { project, candidates: [original], designs, runs };
+        value = { project, candidates, designs, runs };
       else if (path.endsWith("/duplicate")) {
         const source = designs.find((d) => path.includes(d.id))!;
         const d = {
@@ -348,6 +352,14 @@ beforeEach(() => {
           name: "복제안",
           updated_at: String(++clock),
         };
+        designs.push(d);
+        value = d;
+      } else if (method === "POST" && path === "/projects/p1/candidates") {
+        const c = { ...structuredClone(original), ...body, id: "c-map-" + ++clock, project_id: "p1" };
+        candidates.push(c);
+        value = c;
+      } else if (method === "POST" && path === "/projects/p1/designs") {
+        const d = { ...structuredClone(initial), ...body, id: "d" + ++clock, project_id: "p1", updated_at: String(clock) };
         designs.push(d);
         value = d;
       } else if (method === "PATCH" && path.startsWith("/designs/")) {
@@ -365,7 +377,7 @@ beforeEach(() => {
           error: null,
           snapshot: {
             project,
-            candidate: structuredClone(original),
+            candidate: structuredClone(candidates.find((c) => c.id === d.candidate_id)!),
             design: structuredClone(d),
           },
           result: fixtureResult(d),
@@ -417,38 +429,95 @@ describe("candidate data integrity", () => {
     expect(value.exclusions[0].coordinates[0][0][0]).toBeCloseTo(127.1);
   });
 });
-it("keeps saved analysis metrics together and warns when the draft changes", async () => {
-  const user = userEvent.setup();
-  render(<App />);
+/** Walks ① 후보지 → ② 설계 → ③ and runs the analysis there. */
+async function runFirstAnalysis(user: ReturnType<typeof userEvent.setup>) {
   await screen.findByRole("combobox", { name: "후보지 선택" });
+  expect(screen.getByRole("heading", { name: "① 설치대상지 선정" })).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "다음", exact: true }));
+  await screen.findByRole("combobox", { name: "설계 대안 선택" });
+  await user.click(screen.getByRole("button", { name: "다음", exact: true }));
   await user.click(
     screen.getByRole("button", { name: "분석 실행", exact: true }),
   );
   await screen.findByText("분석 완료");
-  // The step board opens on ③ and switches to one step at a time.
+}
+const stepButton = (name: RegExp) =>
+  within(screen.getByRole("list", { name: "가이드라인 6단계" })).getByRole("button", { name });
+it("analyzes a map building with its outline and rooftop defaults and reuses the saved site on retry", async () => {
+  render(<App />);
+  await screen.findByRole("combobox", { name: "후보지 선택" });
+  fireEvent.click(await screen.findByRole("button", { name: "지도 건축물 분석" }));
+  await waitFor(() => expect(runs.length).toBe(1));
+  expect(candidates).toHaveLength(2);
+  const roof = candidates.find((c) => c.site_type === "rooftop")!;
+  expect(roof.name).toBe("지도에서 선택한 주택");
+  expect(roof.geometry!.coordinates[0][1]).toEqual([127.0001, 36.5]);
+  expect(runs[0].snapshot.candidate.id).toBe(roof.id);
+  expect(runs[0].snapshot.design.equipment.capacity_mode).toBe("area");
+  expect(runs[0].snapshot.design.costs.float_per_kw).toBe(0);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  await screen.findByText(/지도에서 선택한 주택의 지도 경계/);
+  fireEvent.click(screen.getByRole("button", { name: "지도 건축물 분석" }));
+  await waitFor(() => expect(runs.length).toBe(2));
+  expect(candidates).toHaveLength(2);
+  expect(designs).toHaveLength(2);
+});
+it("locks later guideline steps until the analysis has run", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await screen.findByRole("combobox", { name: "후보지 선택" });
+  expect((stepButton(/개략공사비/) as HTMLButtonElement).disabled).toBe(true);
+  await user.click(screen.getByRole("button", { name: "다음", exact: true }));
+  await user.click(screen.getByRole("button", { name: "다음", exact: true }));
   expect(screen.getByRole("heading", { name: "③ 설치용량 및 연간발전량" })).toBeTruthy();
-  await user.click(screen.getByRole("tab", { name: /재무성/ }));
-  expect(screen.getByRole("heading", { name: "⑥ 재무성 분석 및 에너지 대체효과" })).toBeTruthy();
+  expect((screen.getByRole("button", { name: "다음", exact: true }) as HTMLButtonElement).disabled).toBe(true);
+});
+it("saves edited conditions when moving to the next step", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await screen.findByRole("combobox", { name: "후보지 선택" });
+  await user.click(screen.getByRole("button", { name: "다음", exact: true }));
+  fireEvent.change(await screen.findByRole("spinbutton", { name: "모듈 수량" }), {
+    target: { value: "800" },
+  });
+  await user.click(screen.getByRole("button", { name: "다음", exact: true }));
+  await waitFor(() => expect(designs[0].equipment.module_count).toBe(800));
+  expect(screen.getByRole("heading", { name: "③ 설치용량 및 연간발전량" })).toBeTruthy();
+});
+it("keeps saved analysis metrics together and warns when the draft changes", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await runFirstAnalysis(user);
+  // The wizard shows one guideline step at a time, starting the results at ③.
+  expect(screen.getByRole("region", { name: "③ 설치용량 및 연간발전량 산정 결과" })).toBeTruthy();
+  for (const title of ["④ 개략공사비", "⑤ 예상수익", "⑥ 재무성 분석 및 에너지 대체효과"]) {
+    await user.click(screen.getByRole("button", { name: "다음", exact: true }));
+    expect(screen.getByRole("heading", { name: title })).toBeTruthy();
+  }
   expect(screen.queryByRole("heading", { name: "③ 설치용량 및 연간발전량" })).toBeNull();
-  await user.click(screen.getByRole("tab", { name: "설계 조건" }));
-  await user.click(screen.getByRole("tab", { name: "② 기자재" }));
+  await user.click(stepButton(/부지·기자재/));
   fireEvent.change(screen.getByRole("spinbutton", { name: "모듈 수량" }), {
     target: { value: "1000" },
   });
+  await user.click(stepButton(/재무성 분석/));
   await screen.findByText(/현재 조건이 분석 시점과 다릅니다/);
+  // The overview keeps site/design context and flags that results are out of date;
+  // the sticky step bar offers the re-run right where the user is.
+  const overview = document.querySelector(".overview")!;
+  expect(overview.textContent).toContain("검토 개요");
+  expect(overview.textContent).toContain("조건 변경됨");
+  expect(within(document.querySelector(".wizard-nav") as HTMLElement).getByRole("button", { name: "다시 분석" })).toBeTruthy();
   const cards = document.querySelectorAll(".stat");
   expect(cards[0].textContent).toContain("660.0");
   expect(cards[3].textContent).toContain("115.4");
-  expect(screen.getByRole("button", { name: "조건 저장" })).toBeTruthy();
+  // Moving forward saved the edit; the result still reflects the old run.
+  expect(designs[0].equipment.module_count).toBe(1000);
+  expect(screen.getByRole("button", { name: "저장된 상태입니다" })).toBeTruthy();
 });
 it("resets validation run selection when switching to another project", async () => {
   const user = userEvent.setup();
   render(<App />);
-  await screen.findByRole("combobox", { name: "후보지 선택" });
-  await user.click(
-    screen.getByRole("button", { name: "분석 실행", exact: true }),
-  );
-  await screen.findByText("분석 완료");
+  await runFirstAnalysis(user);
   await user.click(
     screen.getByRole("button", { name: "실적 CSV 대조", exact: true }),
   );
@@ -468,14 +537,9 @@ it("resets validation run selection when switching to another project", async ()
 it("runs, duplicates, saves changed equipment, compares snapshots and opens a printable report", async () => {
   const user = userEvent.setup();
   render(<App />);
-  await screen.findByRole("combobox", { name: "후보지 선택" });
-  await user.click(
-    screen.getByRole("button", { name: "분석 실행", exact: true }),
-  );
-  await screen.findByText("분석 완료");
-  await user.click(screen.getByText("관리"));
+  await runFirstAnalysis(user);
+  await user.click(stepButton(/부지·기자재/));
   await user.click(screen.getByRole("button", { name: "대안 복제", exact: true }));
-  await user.click(screen.getByRole("tab", { name: "설계 조건" }));
   await waitFor(() => expect(designs.length).toBe(2));
   await waitFor(() =>
     expect(
@@ -483,7 +547,6 @@ it("runs, duplicates, saves changed equipment, compares snapshots and opens a pr
         .value,
     ).toBe("복제안"),
   );
-  await user.click(screen.getByRole("tab", { name: "② 기자재" }));
   const count = screen.getByRole("spinbutton", { name: "모듈 수량" });
   await user.clear(count);
   await user.type(count, "500");
@@ -491,6 +554,7 @@ it("runs, duplicates, saves changed equipment, compares snapshots and opens a pr
     screen.getByRole("button", { name: "조건 저장", exact: true }),
   );
   await waitFor(() => expect(designs[1].equipment.module_count).toBe(500));
+  await user.click(screen.getByRole("button", { name: "다음", exact: true }));
   await user.click(
     screen.getByRole("button", { name: "분석 실행", exact: true }),
   );
@@ -514,7 +578,110 @@ it("runs, duplicates, saves changed equipment, compares snapshots and opens a pr
   await user.click(
     screen.getByRole("button", { name: "사업성 검토", exact: true }),
   );
-  await user.click(screen.getByRole("tab", { name: "결과" }));
-  await user.click(screen.getByRole("tab", { name: /재무성/ }));
+  await user.click(stepButton(/재무성 분석/));
   expect((await screen.findAllByText("산정 불가")).length).toBeGreaterThan(0);
+});
+it("shows manufacturer catalog specs for the selected module and inverter", () => {
+  const catalog = {
+    defaults: { equipment: {}, costs: {}, finance: {} },
+    guideline: "test",
+    modules: [
+      {
+        id: "hd_his_t650uj", label: "HD현대 UJ", module_power_w: 650, module_width_m: 1.134,
+        module_height_m: 2.465, module_price: 325000, source: "HD현대에너지솔루션 제품 페이지",
+        manufacturer: "HD현대에너지솔루션", series: "UJ 시리즈 (HiS-T640~650UJ)", efficiency_pct: 23.3,
+        thickness_mm: 35, weight_kg: 35, features: ["TOPCon"], price_basis: "견적 가정",
+      },
+    ],
+    inverters: [
+      {
+        id: "qvolt_p110ta", manufacturer: "한화큐셀", model: "Q.VOLT P110TA", kw: 110, max_kva: 121,
+        max_efficiency_pct: 98.01, euro_efficiency_pct: 97.73, mppt: 10, channels: 20, weight_kg: 96,
+        size_mm: "1006 × 891 × 329", features: ["AFCI"], unit_cost: 16500000, price_basis: "견적 가정",
+        source: "한화큐셀 제품 페이지", warranty: null,
+      },
+    ],
+  } as Catalog;
+  const design = structuredClone(initial);
+  design.equipment = { ...design.equipment, module_preset: "hd_his_t650uj", inverter_model: "qvolt_p110ta", module_count: 100 };
+  render(
+    <DesignEditor design={design} show={["equipment"]} catalog={catalog} onChange={() => {}} onSave={() => {}} dirty={false} saving={false} />,
+  );
+  expect(screen.getByText("UJ 시리즈 (HiS-T640~650UJ)")).toBeTruthy();
+  expect(screen.getByText("Q.VOLT P110TA")).toBeTruthy();
+  expect(
+    (screen.getByRole("img", { name: "Q.VOLT P110TA 제품 사진" }) as HTMLImageElement).src,
+  ).toContain("catalog/qvolt_p110ta.webp");
+  expect(screen.getByText("98.01 / 97.73%")).toBeTruthy();
+  expect(screen.getByText(/^65(.0)? kW$/)).toBeTruthy();
+  expect(screen.queryByRole("spinbutton", { name: "인버터 효율 · 물리 모델" })).toBeNull();
+  expect(screen.queryByRole("spinbutton", { name: "모듈 최대전압 Vmp" })).toBeNull();
+  cleanup();
+  render(
+    <DesignEditor design={design} show={["costs"]} catalog={catalog} onChange={() => {}} onSave={() => {}} dirty={false} saving={false} />,
+  );
+  expect(screen.getByRole("spinbutton", { name: "모듈 견적 단가 (0 = 가이드라인·환산 단가)" })).toBeTruthy();
+  expect(screen.getByRole("spinbutton", { name: "인버터 견적 단가 (0 = 환산 단가)" })).toBeTruthy();
+});
+it("opens a helper that follows the current screen and closes back to its button", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await screen.findByRole("combobox", { name: "후보지 선택" });
+  expect(screen.queryByRole("complementary", { name: "도우미" })).toBeNull();
+  const toggle = screen.getByRole("button", { name: "도우미" });
+  await user.click(toggle);
+  const panel = () => within(screen.getByRole("complementary", { name: "도우미" }));
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  expect(panel().getByRole("heading", { name: "① 설치대상지 선정" })).toBeTruthy();
+  expect(panel().getByText("사업성 검토 · 1단계 / 6")).toBeTruthy();
+  // Stays open beside the form and follows the wizard step.
+  await user.click(screen.getByRole("button", { name: "다음", exact: true }));
+  expect(panel().getByRole("heading", { name: "② 부지면적 및 기자재 기술사양" })).toBeTruthy();
+  expect(panel().getByText("구조물 형식")).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "실적 CSV 대조", exact: true }));
+  expect(panel().getByRole("heading", { name: "신규 실적 CSV 대조" })).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "운영실적", exact: true }));
+  expect(panel().getByText("입력할 항목이 없는 확인용 화면입니다.")).toBeTruthy();
+  await user.click(panel().getByRole("button", { name: "전체 흐름과 용어 보기" }));
+  expect(screen.getByRole("dialog", { name: "사용 안내" })).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "닫기", exact: true }));
+  await user.click(panel().getByRole("button", { name: "도우미 닫기" }));
+  expect(screen.queryByRole("complementary", { name: "도우미" })).toBeNull();
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(document.activeElement).toBe(toggle);
+});
+
+it("keeps land and floating candidates in one workflow and disables water equipment on land", async () => {
+  candidates.push({ ...structuredClone(original), id: "land1", name: "육상 부지", site_type: "land" });
+  designs.push({ ...structuredClone(initial), id: "land-design", candidate_id: "land1", name: "육상 설계", equipment: { ...initial.equipment, module_preset: "land_480", energy_basis: "physics" } });
+  const user = userEvent.setup();
+  render(<App />);
+  await screen.findByRole("combobox", { name: "후보지 선택" });
+  expect(within(screen.getByRole("combobox", { name: "후보지 선택" })).queryByRole("option", { name: "육상 부지" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "육상 및 건축물", exact: true })).toBeNull();
+  await user.selectOptions(screen.getByRole("combobox", { name: "후보지 선택" }), "land1");
+  await waitFor(() => expect((screen.getByRole("combobox", { name: "후보지 선택" }) as HTMLSelectElement).value).toBe("land1"));
+  expect(within(screen.getByRole("combobox", { name: "후보지 선택" })).queryByRole("option", { name: "테스트 수면" })).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "다음", exact: true }));
+  expect((screen.getByRole("textbox", { name: "부유체 모델·제원명" }) as HTMLInputElement).disabled).toBe(true);
+  expect((screen.getByRole("textbox", { name: "계류장치 모델·제원명" }) as HTMLInputElement).disabled).toBe(true);
+  expect(screen.getByRole("combobox", { name: "사업성에 쓸 발전량" }).textContent).toContain("물리 모델");
+  await user.click(screen.getByRole("button", { name: "이전", exact: true }));
+  await user.selectOptions(screen.getByRole("combobox", { name: "후보지 선택" }), "c1");
+  await waitFor(() => expect((screen.getByRole("combobox", { name: "후보지 선택" }) as HTMLSelectElement).value).toBe("c1"));
+  await user.click(screen.getByRole("button", { name: "다음", exact: true }));
+  expect((screen.getByRole("textbox", { name: "부유체 모델·제원명" }) as HTMLInputElement).disabled).toBe(false);
+});
+
+it("shows roof conditions and hides water survey fields in the land workflow", async () => {
+  const user = userEvent.setup();
+  render(<CandidateForm candidate={{ ...original, site_type: "land" }} terrainMode="land" onSubmit={vi.fn()} />);
+  expect(screen.queryByRole("spinbutton", { name: "수심 · 별도 조사값" })).toBeNull();
+  expect(screen.getByRole("spinbutton", { name: "한전 접속점 연계거리" })).toBeTruthy();
+  expect(screen.getByRole("spinbutton", { name: "부지 경사 · 조사값" })).toBeTruthy();
+  await user.selectOptions(screen.getByRole("combobox", { name: "설치장소 유형" }), "rooftop");
+  await user.selectOptions(screen.getByRole("combobox", { name: "지붕 설치 방식" }), "flush");
+  expect(screen.getByRole("spinbutton", { name: "지붕 경사" })).toBeTruthy();
+  expect(screen.getByRole("spinbutton", { name: "지붕 허용 추가하중 · 구조 검토값" })).toBeTruthy();
+  expect(screen.queryByRole("spinbutton", { name: "부지 경사 · 조사값" })).toBeNull();
 });

@@ -1,7 +1,9 @@
 export type Polygon = { type: "Polygon"; coordinates: number[][][] };
-export type SiteType = "floating" | "plant" | "basin" | "land";
+export type SiteType = "floating" | "plant" | "basin" | "land" | "rooftop";
+export type TerrainMode = "floating" | "land";
 export type Candidate = {
   id: string;
+  solartech_asset_id?: string;
   project_id: string;
   name: string;
   latitude: number;
@@ -14,6 +16,15 @@ export type Candidate = {
   water_depth_m: number | null;
   water_level_m: number | null;
   site_type: SiteType;
+  boundary_setback_m?: number;
+  shading_loss_pct?: number;
+  terrain_slope_deg?: number | null;
+  slope_limit_deg?: number;
+  roof_mount?: "rack" | "flush";
+  roof_tilt_deg?: number;
+  roof_azimuth_deg?: number;
+  roof_allowable_load_kg_m2?: number | null;
+  roof_system_load_kg_m2?: number | null;
   reference_plant_id: string | null;
   source: string;
 };
@@ -43,6 +54,7 @@ export type Project = {
   status?: string;
 };
 export type Economics = {
+  net_profit?: number;
   capex: number;
   annual_opex: number;
   first_year_sales_kwh: number;
@@ -55,6 +67,8 @@ export type Economics = {
   payback_years: number | null;
   effective_price_per_kwh: number;
   required_price_per_kwh: number | null;
+  /** Optional debt (PF) view; null when the design has no loan. */
+  financing?: Financing | null;
   cashflows: {
     year: number;
     generation_kwh: number;
@@ -67,6 +81,29 @@ export type Economics = {
     discounted_net: number;
     cumulative: number;
   }[];
+};
+export type Financing = {
+  loan_pct: number;
+  loan_rate_pct: number;
+  loan_years: number;
+  grace_years: number;
+  loan_amount: number;
+  equity: number;
+  annual_debt_service: number;
+  total_interest: number;
+  equity_irr_pct: number | null;
+  equity_payback_years: number | null;
+  min_dscr: number | null;
+  schedule: {
+    year: number;
+    interest: number;
+    principal: number;
+    debt_service: number;
+    balance: number;
+    equity_cf: number;
+    dscr: number | null;
+  }[];
+  basis: string;
 };
 export type ModelMetrics = {
   months: number;
@@ -96,6 +133,13 @@ export type CostItem = {
   source: string;
 };
 export type Result = {
+  sizing?: SizingPreview | null;
+  weather_station?: WeatherSelection | null;
+  orientation_comparison?: { label: string; tilt: number; azimuth: number; annual_kwh: number; difference_pct: number }[];
+  orientation_basis?: string;
+  price_scenarios?: { price_per_kwh: number; annual_revenue: number; npv: number; payback_years: number | null; net_profit: number }[];
+  revenue_monthly?: { month: number; generation_kwh: number; sales_kwh: number; self_use_kwh: number; revenue: number }[];
+  financial_assumptions?: { label: string; value: number; unit: string; source: string }[];
   capacity_dc_kw: number;
   capacity_ac_kw: number;
   annual_kwh: number;
@@ -141,6 +185,7 @@ export type Result = {
       seismic_coeff_g: number;
       structural_basis: string;
       site_type: SiteType;
+      conditions?: Pick<Candidate, "boundary_setback_m" | "shading_loss_pct" | "terrain_slope_deg" | "slope_limit_deg" | "roof_mount" | "roof_tilt_deg" | "roof_azimuth_deg" | "roof_allowable_load_kg_m2" | "roof_system_load_kg_m2">;
       structure_type: "fixed" | "seasonal";
       tilt: number;
       azimuth: number;
@@ -171,6 +216,39 @@ export type Result = {
         module_height_m: number;
         module_price: number;
       };
+      module_catalog?: CatalogModule | null;
+      inverter_catalog?: CatalogInverter | null;
+      module_loads?: {
+        weight_kg: number;
+        module_count: number;
+        total_weight_kg: number;
+        weight_per_m2: number;
+        wind_speed_ms: number;
+        wind_pressure_pa: number;
+        wind_rating_pa: number;
+        wind_ok: boolean;
+        snow_load_pa: number;
+        snow_rating_pa: number;
+        snow_ok: boolean;
+        rating_basis: string;
+        basis: string;
+      } | null;
+      module_comparison?: {
+        items: {
+          id: string;
+          label: string;
+          module_power_w: number;
+          pitch_m: number;
+          kw_per_1000m2: number;
+          max_modules: number | null;
+          max_kw: number | null;
+          price_per_kw: number;
+          price_source: string;
+          selected: boolean;
+        }[];
+        usable_area_m2: number | null;
+        basis: string;
+      };
       area_m2: number | null;
       usable_area_m2: number | null;
       max_modules_by_area: number | null;
@@ -193,7 +271,7 @@ export type Result = {
         warnings: string[];
       };
       inverter: {
-        units: { kw: number; count: number; unit_cost: number }[];
+        units: { kw: number; count: number; unit_cost: number; model?: string }[];
         ac_capacity_kw: number;
         cost: number;
         rule: string;
@@ -248,6 +326,8 @@ export type Result = {
     usable_area_m2: number;
     coverage_pct: number;
     modules: Polygon[];
+    /** Set when a very large site's module outlines were not stored. */
+    modules_omitted?: boolean;
     warnings: string[];
   } | null;
   reference?: {
@@ -292,21 +372,66 @@ export type Workspace = {
   runs: Run[];
 };
 export type Catalog = {
+  site_defaults?: Partial<Record<SiteType, Catalog["defaults"]>>;
   defaults: {
     equipment: Settings;
     costs: Settings;
     finance: FinanceSettings;
   };
-  modules: {
-    id: string;
-    label: string;
-    module_power_w: number;
-    module_width_m: number;
-    module_height_m: number;
-    module_price: number;
-    source: string;
-  }[];
+  modules: CatalogModule[];
+  inverters?: CatalogInverter[];
   guideline: string;
+};
+/** Guideline 표 3-9 preset or a manufacturer catalog module (extra fields). */
+export type CatalogModule = {
+  id: string;
+  label: string;
+  module_power_w: number;
+  module_width_m: number;
+  module_height_m: number;
+  module_price: number;
+  source: string;
+  manufacturer?: string;
+  series?: string;
+  efficiency_pct?: number;
+  thickness_mm?: number;
+  weight_kg?: number;
+  load_pa?: string;
+  load_front_pa?: number;
+  load_rear_pa?: number;
+  load_basis?: string;
+  floating?: boolean;
+  vmp_v?: number;
+  voc_v?: number;
+  imp_a?: number;
+  isc_a?: number;
+  voltage_temp_coeff_pct?: number;
+  gamma_pdc?: number;
+  noct?: string;
+  max_system_v?: number;
+  warranty?: string;
+  features?: string[];
+  price_basis?: string;
+};
+export type CatalogInverter = {
+  id: string;
+  manufacturer: string;
+  model: string;
+  kw: number;
+  max_kva?: number;
+  rating?: string;
+  max_efficiency_pct: number;
+  euro_efficiency_pct: number;
+  mppt: number | string;
+  channels: number | null;
+  fuse_a?: string;
+  weight_kg: number | string;
+  size_mm: string;
+  features: string[];
+  unit_cost: number;
+  price_basis: string;
+  source: string;
+  warranty: string | null;
 };
 export type WaterBody = {
   id: string;
@@ -323,6 +448,8 @@ export type WaterSearch = {
   attribution: string;
   warning: string | null;
 };
+/** Layers the map can search for candidates: reservoirs, open land, large roofs. */
+export type FindKind = "water" | "land" | "building";
 export type Plant = {
   id: string;
   name: string;
@@ -430,6 +557,30 @@ export type KmaStation = {
   latitude: number | null;
   longitude: number | null;
   coordinate_basis: string;
+  source?: string;
+  has_observations?: boolean;
+};
+export type WeatherSelection = {
+  nearest: KmaStation & { distance_km: number };
+  selected: (KmaStation & { distance_km: number }) | null;
+  basis: string;
+  selection_basis: string;
+  coordinate_source: string;
+  coordinate_date: string;
+  profile: { period: string; source: string; months: { month: number; ghi_kwh_m2_day: number; temp_air: number; days: number }[] } | null;
+};
+export type SizingPreview = {
+  legacy: boolean;
+  minimum_modules?: number;
+  module_count?: number;
+  capacity_kw?: number;
+  target_capacity_kw?: number | null;
+  site_area_m2?: number | null;
+  reserve_pct?: number;
+  pitch?: { gap_m: number; pitch_m: number; plan_depth_m: number; basis: string };
+  module?: { manufacturer: string; model: string; power_w: number; width_m: number; height_m: number; source: string };
+  basis: string;
+  warnings?: string[];
 };
 export type WeatherCheck = {
   irradiance: {

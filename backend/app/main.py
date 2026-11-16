@@ -18,12 +18,13 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
-from . import calibration, kma, kwater, weather
-from .engine import guideline
+from . import calibration, generation, kma, kwater, solartech, weather
+from .engine import catalog, guideline, sizing
 from .geocoding import search_places
 from .seed import seed_candidates
+from .sitefinder import find_sites
 from .waterbodies import find_water_bodies
-from .schemas import CandidateCreate, DesignCreate, ProjectCreate, ProjectPatch, defaults
+from .schemas import CandidateCreate, DesignCreate, Equipment, ProjectCreate, ProjectPatch, defaults
 from .store import create_repository
 from .validation import MAX_BYTES, parse_timestamp, read_csv, validate_measurements
 
@@ -57,7 +58,7 @@ def find(repo, kind, identifier):
 def project_summary(repo, project):
     candidates = [item for item in repo.list("candidates") if item["project_id"] == project["id"]]
     designs = [item for item in repo.list("designs") if item["project_id"] == project["id"]]
-    runs = [item for item in repo.list("runs") if item["project_id"] == project["id"]]
+    runs = [item for item in repo.run_summaries() if item["project_id"] == project["id"]]
     latest = max(runs, key=lambda item: item["created_at"], default=None)
     return {**project, "candidate_count": len(candidates), "design_count": len(designs), "run_count": len(runs),
             "last_run_at": latest["created_at"] if latest else None, "last_run_status": latest["status"] if latest else None,
@@ -180,11 +181,28 @@ def measured_period_model(run, rows, mapping):
     return period_model_rows(run, sorted(years))
 
 
+MAX_LAYOUT_POLYGONS = 5000
+
+
+def compact_layout(result):
+    """Drop module outlines of very large sites; the counts stay.
+
+    Tens of thousands of polygons per run made every project load take tens of
+    seconds, and the map cannot usefully draw them anyway.
+    """
+    layout = (result or {}).get("layout")
+    if not layout or len(layout.get("modules") or []) <= MAX_LAYOUT_POLYGONS:
+        return False
+    layout.update(modules=[], modules_omitted=True)
+    return True
+
+
 def execute_run(repo, identifier, snapshot):
     try:
         from .engine import run_analysis
 
         result = run_analysis(copy.deepcopy(snapshot))
+        compact_layout(result)
         json.dumps(result, allow_nan=False)
         run = repo.get("runs", identifier)
         if run:
@@ -210,10 +228,12 @@ def create_app(repository=None, seed=None):
             if run["status"] == "running":
                 run.update(status="failed", error="서버 재시작으로 분석이 중단되었습니다. 다시 실행하세요.", updated_at=now())
                 repo.put("runs", run)
+            elif compact_layout(run.get("result")):
+                repo.put("runs", run)
         migrate_v2(repo)
         do_seed = seed if seed is not None else os.getenv("SEED_DEMO", "true").lower() == "true"
         if do_seed and not repo.get("meta", "kwater_seeded"):
-            add_project(repo, {"name": "K-water 실적 기반 수상태양광 검토", "description": "OSM 수면 경계(예당저수지·탑정호)와 아산정수장 운영실적 재현 검토. 기상은 ERA5 재분석 관측 이력입니다.", "demo": True})
+            add_project(repo, {"name": "수상·지상·건축물 태양광 검토 (실자료)", "description": "OSM 경계의 수상(예당저수지·탑정호)·인근 지상 부지·건축물 후보와 아산정수장 운영실적 재현 검토. 지상·건축물은 검색 범위 최대 면적의 미검증 후보입니다. 기상은 ERA5 재분석 관측 이력입니다.", "demo": True})
             repo.put("meta", {"id": "kwater_seeded", "created_at": now()})
         yield
         app.state.executor.shutdown(wait=True)
@@ -244,14 +264,35 @@ def create_app(repository=None, seed=None):
     @app.get("/api/catalogs")
     def catalogs():
         values = defaults()
-        return {"modules": [{"id": key, **value} for key, value in guideline.MODULES.items()],
+        return {"modules": [{"id": key, **value} for key, value in guideline.MODULES.items()]
+                + [{"id": key, **value} for key, value in catalog.MODULES.items()],
+                "inverters": [{"id": key, **value} for key, value in catalog.INVERTERS.items()],
                 "inverter_units": [{"kw": kw, "unit_cost": cost, "junction": guideline.JUNCTION[kw]}
                                    for kw, cost in guideline.INVERTER_UNITS.items()],
-                "string_example": guideline.STRING_EXAMPLE, "guideline": guideline.SOURCE, "defaults": values}
+                "string_example": guideline.STRING_EXAMPLE, "guideline": guideline.SOURCE, "defaults": values,
+                "site_defaults": {kind: defaults(kind) for kind in ("land", "rooftop", "plant", "basin")}}
 
     @app.get("/api/guideline/site")
     def guideline_site(latitude: float = Query(..., ge=33, le=39), longitude: float = Query(..., ge=124, le=132)):
         return guideline.site_factors(latitude, longitude)
+
+    @app.get("/api/weather/stations")
+    def weather_stations():
+        return {"stations": kma.station_catalog(), "source": kma.STATION_META["source"],
+                "retrieved_on": kma.STATION_META["retrieved_on"]}
+
+    @app.get("/api/weather/nearest")
+    def nearest_weather(latitude: float = Query(..., ge=-89, le=89), longitude: float = Query(..., ge=-180, le=180)):
+        return kma.nearest_weather(latitude, longitude)
+
+    @app.post("/api/analysis/preview")
+    def sizing_preview(payload: dict = Body(...)):
+        candidate = checked(CandidateCreate, payload.get("candidate", {}))
+        equipment = checked(Equipment, payload.get("equipment", {}))
+        try:
+            return sizing.preview(candidate, equipment)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
 
     @app.get("/api/plants")
     def plants():
@@ -276,6 +317,75 @@ def create_app(repository=None, seed=None):
                        "availability_factor": calibration.AVAILABILITY_FACTOR,
                        "plant_outlier_factor": calibration.PLANT_OUTLIER_FACTOR},
                 "weather_source": weather.SOURCE}
+
+    @app.get("/api/solartech/assets")
+    def solartech_assets():
+        return solartech.load_registry()
+
+    @app.get("/api/solartech/generation/{series_id}")
+    def generation_records(series_id: str, year: int = Query(..., ge=1900, le=2200)):
+        data = generation.catalog(solartech.DATA_PATH.parent)
+        series = next((s for s in (data or {}).get("series", []) if s["id"] == series_id), None)
+        if series is None:
+            raise HTTPException(404, "발전실적을 찾을 수 없습니다.")
+        return {"series": series, "year": year, "records": generation.observations(series_id, year, solartech.DATA_PATH.parent)}
+
+    @app.post("/api/solartech/generation/{series_id}/compare")
+    def compare_generation(series_id: str, request: Request, payload: dict = Body(...)):
+        if payload.get("assume_kwh") is not True:
+            raise HTTPException(422, "원본 단위의 kWh 해석 가정을 확인해야 대조할 수 있습니다.")
+        year = payload.get("year")
+        if isinstance(year, bool) or not isinstance(year, int) or not 1900 <= year <= 2200:
+            raise HTTPException(422, "대조 연도를 확인하세요.")
+        run_id = payload.get("run_id")
+        if not isinstance(run_id, str):
+            raise HTTPException(422, "완료된 분석을 선택하세요.")
+        run = find(request.app.state.repo, "runs", run_id)
+        if run["status"] != "completed":
+            raise HTTPException(409, "완료된 분석을 선택하세요.")
+        data = generation.catalog(solartech.DATA_PATH.parent)
+        series = next((s for s in (data or {}).get("series", []) if s["id"] == series_id), None)
+        if series is None:
+            raise HTTPException(404, "발전실적을 찾을 수 없습니다.")
+        try:
+            return generation.compare(series, run, year, generation.observations(series_id, year, solartech.DATA_PATH.parent))
+        except ConnectionError as error:
+            raise HTTPException(502, str(error)) from error
+        except (ValueError, KeyError) as error:
+            raise HTTPException(422, str(error)) from error
+
+    @app.post("/api/projects/{identifier}/solartech-assets/{asset_id}", status_code=201)
+    def import_solartech_asset(identifier: str, asset_id: str, payload: solartech.AssetImport, request: Request):
+        repo = request.app.state.repo
+        find(repo, "projects", identifier)
+        registry = solartech.load_registry()
+        asset = next((a for a in registry["assets"] if a["id"] == asset_id), None)
+        if asset is None:
+            raise HTTPException(404, "엑셀 발전소 정보를 찾을 수 없습니다.")
+        # A repeated click must not create another candidate or overwrite edits.
+        with repo.lock:
+            existing = next((c for c in repo.list("candidates") if c["project_id"] == identifier and c.get("solartech_asset_id") == asset_id), None)
+            if existing:
+                existing_design = next((d for d in repo.list("designs") if d["candidate_id"] == existing["id"]), None)
+                return {"candidate": existing, "design": existing_design, "already_imported": True}
+            candidate_input, design_input = solartech.review_inputs(asset, payload, registry["source_file"])
+            try:
+                sizing.preview(candidate_input, design_input["equipment"])
+            except ValueError as error:
+                raise HTTPException(422, str(error)) from error
+            candidate = record(candidate_input, project_id=identifier, demo=False, solartech_asset_id=asset_id,
+                               solartech_source={"file": registry["source_file"], "sha256": registry["sha256"], "asset": asset,
+                                                 "confirmed_inputs": payload.model_dump()})
+            design_input["candidate_id"] = candidate["id"]
+            design = record(design_input, project_id=identifier)
+            repo.put("candidates", candidate)
+            try:
+                repo.put("designs", design)
+            except Exception:
+                repo.delete("candidates", candidate["id"])
+                raise
+            touch(repo, identifier)
+        return {"candidate": candidate, "design": design, "already_imported": False}
 
     @app.get("/api/plants/{identifier}")
     def plant_detail(identifier: str):
@@ -349,6 +459,17 @@ def create_app(repository=None, seed=None):
         except ConnectionError as error:
             raise HTTPException(502, str(error)) from error
 
+    @app.get("/api/site-candidates")
+    def site_candidates(kind: str, west: float, south: float, east: float, north: float):
+        try:
+            return find_sites(kind, west, south, east, north)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        except PermissionError as error:
+            raise HTTPException(503, str(error)) from error
+        except ConnectionError as error:
+            raise HTTPException(502, str(error)) from error
+
     @app.get("/api/projects")
     def projects(request: Request):
         repo = request.app.state.repo
@@ -413,17 +534,7 @@ def create_app(repository=None, seed=None):
     def workspace(identifier: str, request: Request):
         repo = request.app.state.repo
         project = find(repo, "projects", identifier)
-        runs = []
-        for run in repo.list("runs"):
-            if run["project_id"] != identifier:
-                continue
-            summary = dict(run)
-            if summary.get("result"):
-                summary["result"] = {key: value for key, value in summary["result"].items() if key != "hourly"}
-                if summary["result"].get("layout"):
-                    summary["result"]["layout"] = {key: value for key, value in summary["result"]["layout"].items()
-                                                   if key != "modules"}
-            runs.append(summary)
+        runs = [run for run in repo.run_summaries() if run["project_id"] == identifier]
         return {"project": project_summary(repo, project),
                 "candidates": [item for item in repo.list("candidates") if item["project_id"] == identifier],
                 "designs": [item for item in repo.list("designs") if item["project_id"] == identifier], "runs": runs}
@@ -463,7 +574,12 @@ def create_app(repository=None, seed=None):
         candidate = find(repo, "candidates", payload.candidate_id)
         if candidate["project_id"] != identifier:
             raise HTTPException(422, "다른 프로젝트의 후보지를 연결할 수 없습니다.")
-        design = record(payload.model_dump(), project_id=identifier)
+        values = payload.model_dump()
+        site_defaults = defaults(candidate.get("site_type", "floating"))
+        for section in ("equipment", "costs", "finance"):
+            supplied = getattr(payload, section).model_fields_set if section in payload.model_fields_set else set()
+            values[section] = {**site_defaults[section], **{key: values[section][key] for key in supplied}}
+        design = record(values, project_id=identifier)
         repo.put("designs", design)
         touch(repo, identifier)
         return design
@@ -510,12 +626,13 @@ def create_app(repository=None, seed=None):
         design = find(repo, "designs", identifier)
         project = find(repo, "projects", design["project_id"])
         candidate = find(repo, "candidates", design["candidate_id"])
-        running = [item for item in repo.list("runs") if item["status"] == "running"]
+        running = [item for item in repo.run_summaries() if item["status"] == "running"]
         if len(running) >= 8:
             raise HTTPException(429, "분석 대기열이 가득 찼습니다. 잠시 후 다시 실행하세요.")
         snapshot = copy.deepcopy({"project": project, "candidate": candidate, "design": design,
                                    "engine_version": VERSION,
-                                   "weather": {"source": weather.SOURCE, "years": weather.long_term_years()}})
+                                   "weather": {"source": weather.SOURCE, "years": weather.long_term_years(),
+                                               "station_selection": kma.nearest_weather(candidate["latitude"], candidate["longitude"])}})
         run = record({"project_id": project["id"], "design_id": identifier, "status": "running", "snapshot": snapshot, "result": None, "error": None})
         repo.put("runs", run)
         request.app.state.executor.submit(execute_run, repo, run["id"], snapshot)
@@ -534,7 +651,7 @@ def create_app(repository=None, seed=None):
         result = run["result"]
         stream = io.StringIO(newline="")
         writer = csv.writer(stream)
-        writer.writerow(["section", "month_or_metric", "value", "unit"])
+        writer.writerow(["section", "month_or_metric", "value", "unit", "source_or_basis"])
         for row in result["monthly"]:
             writer.writerow(["generation", row["month"], row["energy_kwh"], "kWh"])
             writer.writerow(["generation_physics", row["month"], row["physics_kwh"], "kWh"])
@@ -546,7 +663,17 @@ def create_app(repository=None, seed=None):
         for key, unit in units.items():
             writer.writerow(["summary", key, result.get(key), unit])
         for item in result["steps"]["costs"]["items"]:
-            writer.writerow(["capex", item["label"], item["amount"], "KRW"])
+            writer.writerow(["capex", item["label"], item["amount"], "KRW", f"{item.get('basis', '')} · {item.get('source', '')}"])
+        for item in result.get("financial_assumptions", []):
+            writer.writerow(["assumption", item["label"], item["value"], item["unit"], item["source"]])
+        for row in result.get("revenue_monthly", []):
+            writer.writerow(["forecast_monthly_revenue", row["month"], row["revenue"], "KRW", "예측 판매전력량 × 사용자 판매단가 (자가소비 절감 포함)"])
+        for row in result.get("orientation_comparison", []):
+            writer.writerow(["orientation", row["label"], row["annual_kwh"], "kWh/year", f"경사 {row['tilt']}° · 방위 {row['azimuth']}° · 물리 모델"])
+        selection = result.get("weather_station")
+        if selection and selection.get("selected"):
+            station = selection["selected"]
+            writer.writerow(["weather_station", station["name"], station["distance_km"], "km", selection["basis"]])
         for key, value in result["economics"].items():
             if not isinstance(value, (list, dict)):
                 writer.writerow(["economics", key, value, ""])
@@ -562,6 +689,8 @@ def create_app(repository=None, seed=None):
         writer.writerow(["engine_version", run["snapshot"]["engine_version"]])
         provenance = result["provenance"]
         writer.writerow(["weather", provenance["weather_source"], f"{provenance['period']['start']} ~ {provenance['period']['end']}"])
+        for assumption in provenance.get("assumptions", []):
+            writer.writerow(["assumption_note", assumption])
         return Response("\ufeff" + stream.getvalue(), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": f'attachment; filename="solar-{identifier}.csv"'})
 

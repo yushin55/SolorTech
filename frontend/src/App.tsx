@@ -37,9 +37,10 @@ import type {
   Project,
   Run,
   WaterBody,
+  FindKind,
   Workspace,
+  TerrainMode,
 } from "./types";
-import { hasGeometry } from "./types";
 import MapView from "./MapLoader";
 import { CandidateForm, DesignEditor } from "./Editors";
 import {
@@ -51,13 +52,26 @@ import {
 import type { Grade } from "./mapData";
 import Validation from "./Validation";
 import { ModelValidation, PlantRecords, WeatherValidation } from "./Records";
-import { GLOSSARY, ReviewSteps, Verdict } from "./Steps";
+import {
+  GLOSSARY,
+  ReferenceBacktest,
+  ReviewOverview,
+  StepResult,
+  Stepper,
+  Verdict,
+  WIZARD_STEPS,
+} from "./Steps";
 import ReportBody from "./Report";
+import { GuidePanel } from "./Guide";
+import { boundaryDefaults, defaultsForSite } from "./terrain";
+import { CandidateWeather } from "./Feasibility";
+import SolarTech from "./SolarTech";
+import type { AssetImportResult, AssetInputs } from "./SolarTech";
 
-type Page = "review" | "data" | "weather" | "model" | "compare" | "validation" | "report";
+type Page = "review" | "data" | "assets" | "weather" | "model" | "compare" | "validation" | "report";
 type Modal =
   | { kind: "project"; project?: Project }
-  | { kind: "candidate"; candidate: Candidate; isNew?: boolean }
+  | { kind: "candidate"; candidate: Candidate; isNew?: boolean; useBoundary?: boolean }
   | { kind: "help" }
   | null;
 const colors = ["#2563eb", "#0d9488", "#d97706", "#7c3aed", "#db2777"];
@@ -66,11 +80,11 @@ const icons: Record<Page, LucideIcon> = {
   compare: GitCompareArrows,
   report: FileText,
   data: Database,
+  assets: Database,
   weather: CloudSun,
   model: ChartLine,
   validation: FileUp,
 };
-type View = "result" | "map" | "design";
 const pages: {
   id: Page;
   group: "검토" | "근거 데이터" | "도구";
@@ -103,6 +117,14 @@ const pages: {
     hint: "인쇄·PDF·CSV",
     title: "사업 검토 보고서",
     description: "입력 조건과 6단계 산정 근거를 담은 결과를 저장합니다.",
+  },
+  {
+    id: "assets",
+    group: "근거 데이터",
+    label: "발전소·설비정보",
+    hint: "SolarTech 엑셀 제원",
+    title: "발전소·설비정보",
+    description: "엑셀 발전소 정보를 조회하고 확인한 설비 조건을 사업성 검토로 가져옵니다.",
   },
   {
     id: "data",
@@ -294,7 +316,7 @@ function Monthly({
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]),
-    [workspace, setWorkspace] = useState<Workspace | null>(null),
+    [fullWorkspace, setWorkspace] = useState<Workspace | null>(null),
     [catalog, setCatalog] = useState<Catalog | null>(null),
     [projectId, setProjectId] = useState(
       localStorage.getItem("solar-project") || "",
@@ -302,7 +324,7 @@ export default function App() {
     [candidateId, setCandidateId] = useState(""),
     [designId, setDesignId] = useState(""),
     [page, setPage] = useState<Page>("review"),
-    [view, setView] = useState<View>("result"),
+    [step, setStep] = useState(0),
     [draft, setDraft] = useState<Design | null>(null),
     [activeRun, setActiveRun] = useState<Run | null>(null),
     [historyId, setHistoryId] = useState(""),
@@ -314,9 +336,13 @@ export default function App() {
     [saving, setSaving] = useState(false),
     [running, setRunning] = useState(false),
     [health, setHealth] = useState<Record<string, unknown>>({}),
-    [projectMenu, setProjectMenu] = useState(false);
+    [projectMenu, setProjectMenu] = useState(false),
+    [guideOpen, setGuideOpen] = useState(false);
+  const workspace = fullWorkspace;
   const candidate =
     workspace?.candidates.find((c) => c.id === candidateId) || null;
+  const terrainMode: TerrainMode = candidate?.site_type === "floating" ? "floating" : "land";
+  const landMode = terrainMode === "land";
   const design = workspace?.designs.find((d) => d.id === designId) || null;
   const dirty = !!draft && JSON.stringify(draft) !== JSON.stringify(design);
   const result = activeRun?.status === "completed" ? activeRun.result : null;
@@ -333,11 +359,22 @@ export default function App() {
     [workspace],
   );
   const compareRuns = latestRuns.filter((r) => selected.includes(r.design_id));
+  const comparisonOutdated = compareRuns.some((run) => {
+    const currentDesign = workspace?.designs.find((item) => item.id === run.design_id);
+    const currentCandidate = workspace?.candidates.find((item) => item.id === run.snapshot.candidate.id);
+    return (dirty && run.design_id === designId) || !currentDesign || !currentCandidate ||
+      designInputSignature(currentDesign) !== designInputSignature(run.snapshot.design) ||
+      candidateInputSignature(currentCandidate) !== candidateInputSignature(run.snapshot.candidate);
+  });
   const history =
     workspace?.runs
       .filter((r) => r.design_id === designId)
       .sort((a, b) => b.created_at.localeCompare(a.created_at)) || [];
   const chosenRunId = historyId || history[0]?.id || "";
+  const candidateDesigns =
+    workspace?.designs.filter((d) => d.candidate_id === candidateId) || [];
+  // Steps ④–⑥ show computed results, so they open once an analysis exists.
+  const reachable = !candidate ? 0 : !design ? 1 : activeRun?.result ? 5 : 2;
   const stale =
     !!activeRun &&
     (dirty ||
@@ -359,13 +396,14 @@ export default function App() {
   const refreshWorkspace = useCallback(async (id: string) => {
     const w = await api<Workspace>(`/projects/${id}/workspace`);
     setWorkspace(w);
+    const visible = w;
     setCandidateId((old) =>
-      w.candidates.some((c) => c.id === old) ? old : w.candidates[0]?.id || "",
+      visible.candidates.some((c) => c.id === old) ? old : visible.candidates[0]?.id || "",
     );
     setDesignId((old) =>
-      w.designs.some((d) => d.id === old) ? old : w.designs[0]?.id || "",
+      visible.designs.some((d) => d.id === old) ? old : visible.designs[0]?.id || "",
     );
-    return w;
+    return visible;
   }, []);
   useEffect(() => {
     void Promise.all([
@@ -386,6 +424,7 @@ export default function App() {
     if (!projectId) return;
     localStorage.setItem("solar-project", projectId);
     setHistoryId("");
+    setStep(0);
     setActiveRun(null);
     setLoading(true);
     void refreshWorkspace(projectId)
@@ -423,10 +462,20 @@ export default function App() {
       )
     )
       return;
-    const timer = setInterval(() => {
-      void refreshWorkspace(projectId).catch(handleError);
+    // One request at a time: a slow answer must not let refreshes pile up.
+    // A successful refresh replaces the workspace and re-arms this effect.
+    let stopped = false;
+    let timer = setTimeout(function poll() {
+      void refreshWorkspace(projectId)
+        .catch(handleError)
+        .finally(() => {
+          if (!stopped) timer = setTimeout(poll, 1600);
+        });
     }, 1600);
-    return () => clearInterval(timer);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
   }, [workspace, projectId, refreshWorkspace, handleError]);
   useEffect(() => {
     if (!notice) return;
@@ -477,11 +526,40 @@ export default function App() {
       setRunning(false);
     }
   }
+  /** Moves through the wizard; going forward saves the conditions entered so far. */
+  async function goTo(next: number) {
+    if (next > step && dirty) {
+      setSaving(true);
+      try {
+        await saveDesignStrict();
+        await refreshWorkspace(projectId);
+      } catch (e) {
+        handleError(e);
+        return;
+      } finally {
+        setSaving(false);
+      }
+    }
+    setStep(next);
+    document.querySelector(".wizard")?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+  }
   async function saveDesignStrict() {
     if (!draft) return;
     const { id, project_id, ...payload } = draft;
     void project_id;
     await mutate(`/designs/${id}`, "PATCH", payload);
+  }
+  async function importAsset(assetId: string, values: AssetInputs) {
+    if (dirty && draft) await saveDesignStrict();
+    const imported = await mutate<AssetImportResult>(`/projects/${projectId}/solartech-assets/${assetId}`, "POST", values);
+    await refreshWorkspace(projectId);
+    await refreshProjects();
+    setCandidateId(imported.candidate.id);
+    setDesignId(imported.design?.id || "");
+    setHistoryId("");
+    setStep(0);
+    setPage("review");
+    setNotice(imported.already_imported ? "이미 가져온 발전소의 검토를 열었습니다." : "엑셀 설비 조건을 가져왔습니다. 기자재·공사비 가정을 확인한 후 분석을 실행하세요.");
   }
   async function updateCandidate(data: Partial<Candidate>) {
     if (!candidate) return;
@@ -500,11 +578,12 @@ export default function App() {
       const d = await mutate<Design>(`/projects/${projectId}/designs`, "POST", {
         name: `대안 ${workspace!.designs.filter((d) => d.candidate_id === candidateId).length + 1}`,
         candidate_id: candidateId,
-        ...catalog.defaults,
+        ...defaultsForSite(catalog, candidate.site_type),
       });
       await refreshWorkspace(projectId);
       setDesignId(d.id);
       setPage("review");
+      setStep(1);
       setSelected((s) => [...s, d.id]);
     } catch (e) {
       handleError(e);
@@ -525,21 +604,22 @@ export default function App() {
   function newCandidate(position?: { latitude: number; longitude: number }) {
     const lat = position?.latitude ?? 36.55,
       lng = position?.longitude ?? 127.02;
+    const dx = landMode ? 0.0003 : 0.002, dy = landMode ? 0.0002 : 0.0015;
     const c: Candidate = {
       id: "",
       project_id: projectId,
-      name: "새 수면 후보지",
+      name: "새 후보지",
       latitude: lat,
       longitude: lng,
       geometry: {
         type: "Polygon",
         coordinates: [
           [
-            [lng - 0.002, lat - 0.0015],
-            [lng + 0.002, lat - 0.0015],
-            [lng + 0.002, lat + 0.0015],
-            [lng - 0.002, lat + 0.0015],
-            [lng - 0.002, lat - 0.0015],
+            [lng - dx, lat - dy],
+            [lng + dx, lat - dy],
+            [lng + dx, lat + dy],
+            [lng - dx, lat + dy],
+            [lng - dx, lat - dy],
           ],
         ],
       },
@@ -548,37 +628,92 @@ export default function App() {
       cable_distance_m: null,
       water_depth_m: null,
       water_level_m: null,
-      site_type: "floating",
+      site_type: landMode ? "land" : "floating",
+      ...(landMode ? { boundary_setback_m: 1, shading_loss_pct: 0, terrain_slope_deg: null,
+        slope_limit_deg: 15, roof_mount: "rack" as const, roof_tilt_deg: 10, roof_azimuth_deg: 180,
+        roof_allowable_load_kg_m2: null, roof_system_load_kg_m2: null } : {}),
       reference_plant_id: null,
-      source: "사용자 지정 경계",
+      source: landMode ? "초기 사각형 — 실제 부지·지붕 경계로 수정 필요" : "사용자 지정 경계",
     };
     setModal({ kind: "candidate", candidate: c, isNew: true });
   }
-  function newCandidateFromWater(water: WaterBody) {
-    setModal({
-      kind: "candidate",
-      isNew: true,
-      candidate: {
+  function candidateFromSite(site: WaterBody, kind: FindKind): Candidate {
+    const area =
+      site.area_m2 < 10000
+        ? `${num(site.area_m2, 0)} m²`
+        : `${num(site.area_m2 / 10000, 1)} ha`;
+    const dry = kind !== "water";
+    return {
         id: "",
         project_id: projectId,
-        name:
-          water.name ||
-          `이름 없는 ${water.kind} (${num(water.area_m2 / 10000, 1)} ha)`,
-        latitude: water.latitude,
-        longitude: water.longitude,
-        geometry: water.geometry,
+        name: site.name || `이름 없는 ${site.kind} (${area})`,
+        latitude: site.latitude,
+        longitude: site.longitude,
+        geometry: site.geometry,
         exclusions: [],
         grid_point: null,
         cable_distance_m: null,
         water_depth_m: null,
         water_level_m: null,
-        site_type: "floating",
+        site_type: kind === "water" ? "floating" : kind === "land" ? "land" : "rooftop",
+        ...(dry
+          ? { boundary_setback_m: 1, shading_loss_pct: 0, terrain_slope_deg: null,
+              slope_limit_deg: 15, roof_mount: "rack" as const, roof_tilt_deg: 10, roof_azimuth_deg: 180,
+              roof_allowable_load_kg_m2: null, roof_system_load_kg_m2: null }
+          : {}),
         reference_plant_id: null,
-        source: `수면 경계 © OpenStreetMap contributors · ${water.id} · ${num(water.area_m2 / 10000, 1)} ha`,
-      },
-    });
+        source:
+          kind === "water"
+            ? `수면 경계 © OpenStreetMap contributors · ${site.id} · ${area}`
+            : `${site.kind} 경계 © OpenStreetMap contributors · ${site.id} · ${area} · ${kind === "land" ? "지목·용도지역·경사·소유" : "지붕 구조·하중·소유"} 미확인`,
+      };
   }
-  async function saveCandidate(value: Candidate, isNew = false) {
+  function newCandidateFromSite(site: WaterBody, kind: FindKind) {
+    setModal({ kind: "candidate", isNew: true, useBoundary: true, candidate: candidateFromSite(site, kind) });
+  }
+  async function analyzeMapCandidate(id: string) {
+    if (!workspace || !catalog) throw new Error("프로젝트를 불러온 뒤 다시 시도해 주세요.");
+    setRunning(true); setError("");
+    try {
+      if (dirty && draft) await saveDesignStrict();
+      const c = workspace.candidates.find((entry) => entry.id === id);
+      if (!c) throw new Error("선택한 대상을 찾지 못했습니다.");
+      const existing = workspace.designs.find((entry) => entry.id === designId && entry.candidate_id === id)
+        || workspace.designs.find((entry) => entry.candidate_id === id);
+      const d = existing || await mutate<Design>(`/projects/${projectId}/designs`, "POST", {
+        ...boundaryDefaults(defaultsForSite(catalog, c.site_type), !!c.geometry), name: "기본안", candidate_id: id,
+      });
+      await mutate(`/designs/${d.id}/runs`);
+      await refreshWorkspace(projectId);
+      setCandidateId(id); setDesignId(d.id); setHistoryId("");
+      setNotice(`${c.name}의 발전량·사업성 분석을 시작했습니다.`);
+    } finally { setRunning(false); }
+  }
+  async function analyzeMapSite(site: WaterBody, kind: FindKind) {
+    if (!workspace || !catalog) throw new Error("프로젝트를 불러온 뒤 다시 시도해 주세요.");
+    const existing = workspace.candidates.find((c) => c.source?.includes(`· ${site.id} ·`) &&
+      c.site_type === (kind === "water" ? "floating" : kind === "land" ? "land" : "rooftop"));
+    if (existing) { await analyzeMapCandidate(existing.id); return; }
+    setRunning(true); setError("");
+    try {
+      if (dirty && draft) await saveDesignStrict();
+      const { id, project_id, ...payload } = candidateFromSite(site, kind);
+      void id; void project_id;
+      const c = await mutate<Candidate>(`/projects/${projectId}/candidates`, "POST", payload);
+      // Keep the saved outline available even if creating the design or run fails.
+      await refreshWorkspace(projectId);
+      setCandidateId(c.id); setDesignId(""); setHistoryId("");
+      const d = await mutate<Design>(`/projects/${projectId}/designs`, "POST", {
+        ...boundaryDefaults(defaultsForSite(catalog, c.site_type), true), name: "기본안", candidate_id: c.id,
+      });
+      await refreshWorkspace(projectId);
+      setDesignId(d.id); setSelected((values) => [...values, d.id]);
+      await mutate(`/designs/${d.id}/runs`);
+      await refreshWorkspace(projectId);
+      setNotice(`${c.name}의 지도 경계와 유형별 기본 설계로 분석을 시작했습니다.`);
+    } finally { setRunning(false); }
+  }
+  async function saveCandidate(value: Candidate, isNew = false, useBoundary = false) {
     try {
       const { id, project_id, ...payload } = value;
       void project_id;
@@ -591,7 +726,7 @@ export default function App() {
       const d =
         isNew && catalog
           ? await mutate<Design>(`/projects/${projectId}/designs`, "POST", {
-              ...catalog.defaults,
+              ...boundaryDefaults(defaultsForSite(catalog, c.site_type), useBoundary),
               name: "기본안",
               candidate_id: c.id,
             })
@@ -681,6 +816,16 @@ export default function App() {
                 cable_distance_m: candidate.cable_distance_m,
                 water_depth_m: candidate.water_depth_m,
                 water_level_m: candidate.water_level_m,
+                site_type: candidate.site_type,
+                boundary_setback_m: candidate.boundary_setback_m,
+                shading_loss_pct: candidate.shading_loss_pct,
+                terrain_slope_deg: candidate.terrain_slope_deg,
+                slope_limit_deg: candidate.slope_limit_deg,
+                roof_mount: candidate.roof_mount,
+                roof_tilt_deg: candidate.roof_tilt_deg,
+                roof_azimuth_deg: candidate.roof_azimuth_deg,
+                roof_allowable_load_kg_m2: candidate.roof_allowable_load_kg_m2,
+                roof_system_load_kg_m2: candidate.roof_system_load_kg_m2,
               },
               geometry: candidate.geometry,
             },
@@ -754,10 +899,38 @@ export default function App() {
         b.created_at.localeCompare(a.created_at),
       )[0]
     : null;
-  const showRun = page === "review" || page === "report";
-  const mappable = workspace?.candidates.filter(hasGeometry) || [];
+  const showRun = page === "report";
+  const runStatus = currentPending
+    ? "pending"
+    : !result
+      ? "none"
+      : stale
+        ? "stale"
+        : "done";
+  /** One-line "what to do next" shown in the sticky step bar. */
+  const nextHint = currentPending
+    ? "발전량·사업성을 계산하고 있습니다. 끝나면 결과가 자동으로 표시됩니다."
+    : stale && step >= 2
+      ? "조건이 분석 시점과 다릅니다. ‘다시 분석’으로 결과에 반영하세요."
+      : step === 0
+        ? !candidate
+          ? "지도에서 지역을 검색하고 ‘이 지역 후보 찾기’의 수상·지상·건축물로 후보지를 추가하세요."
+          : "경계·제외 구역·연결점을 확인한 뒤 다음 단계로 넘어가세요."
+        : step === 1
+          ? dirty
+            ? "다음 단계로 넘어가면 입력한 조건이 저장됩니다."
+            : "구조물·모듈·인버터를 정하고 다음 단계에서 분석을 실행하세요."
+          : step === 2
+            ? activeRun?.result
+              ? "발전량을 확인했으면 개략공사비 단계로 넘어가세요."
+              : "‘분석 실행’을 누르면 ③~⑥단계가 한 번에 계산되고 다음으로 넘어갈 수 있습니다."
+            : step === 3
+              ? "주황색 ‘견적 가정’ 단가를 실제 견적으로 바꾸면 결과가 정확해집니다."
+              : step === 4
+                ? "판매 단가 방식을 정하고 1년차 수익을 확인하세요."
+                : "결론을 확인하고 검토 보고서로 인쇄·PDF 저장하세요.";
   return (
-    <div className="app">
+    <div className={"app" + (guideOpen ? " guide-open" : "")}>
       <aside className="sidebar">
         <a
           className="brand"
@@ -768,7 +941,7 @@ export default function App() {
           }}
         >
           수면
-          <small>수상태양광 사업성 검토</small>
+          <small>태양광 사업성 검토</small>
         </a>
         <nav className="nav" aria-label="화면">
           {(["검토", "근거 데이터", "도구"] as const).map((group) => (
@@ -847,6 +1020,16 @@ export default function App() {
               {lastRun ? date(lastRun.created_at) : "없음"}
             </span>
           )}
+          <button
+            className="btn outline guide-toggle"
+            aria-expanded={guideOpen}
+            aria-controls="guide-panel"
+            title="지금 화면에서 무엇을 입력하는지 설명합니다"
+            onClick={() => setGuideOpen((open) => !open)}
+          >
+            <CircleHelp size={17} aria-hidden="true" />
+            도우미
+          </button>
         </div>
         <header className="page-header">
           <div>
@@ -856,7 +1039,7 @@ export default function App() {
                 <span className="tag">실데이터 예시</span>
               )}
             </div>
-            <p>{pageInfo.description}</p>
+            <p>{landMode && page === "review" ? "육상 부지·건축물 조건으로 배치·발전량·공사비·수익·재무성을 산정합니다." : pageInfo.description}</p>
           </div>
           {showRun && (
             <button
@@ -920,126 +1103,29 @@ export default function App() {
         ) : (
           <>
             {page === "review" && (
-              <>
-                <div className="workbar">
-                  <label>
-                    <span>후보지</span>
-                    <select
-                      aria-label="후보지 선택"
-                      value={candidateId}
-                      onChange={(e) => {
-                        const id = e.target.value;
-                        setCandidateId(id);
-                        setDesignId(workspace.designs.find((d) => d.candidate_id === id)?.id || "");
-                        setHistoryId("");
-                      }}
-                    >
-                      {workspace.candidates.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                      {!workspace.candidates.length && <option value="">후보지 없음</option>}
-                    </select>
-                  </label>
-                  <label>
-                    <span>설계 대안</span>
-                    <select
-                      aria-label="설계 대안 선택"
-                      value={designId}
-                      onChange={(e) => setDesignId(e.target.value)}
-                    >
-                      {workspace.designs
-                        .filter((d) => d.candidate_id === candidateId)
-                        .map((d) => (
-                          <option key={d.id} value={d.id}>
-                            {d.name}
-                          </option>
-                        ))}
-                    </select>
-                  </label>
-                  <details className="dropdown">
-                    <summary className="btn ghost">관리</summary>
-                    <div className="menu-list">
-                      <span className="menu-label">후보지</span>
-                      <button onClick={(e) => { closeMenu(e); newCandidate(); }}>새 후보지 추가</button>
-                      {candidate && (
-                        <>
-                          <button onClick={(e) => { closeMenu(e); setModal({ kind: "candidate", candidate }); }}>
-                            이름·좌표·수심 수정
-                          </button>
-                          {candidate.geometry && (
-                            <button onClick={(e) => { closeMenu(e); exportGeo(); }}>GeoJSON 내보내기</button>
-                          )}
-                          <label>
-                            GeoJSON 가져오기
-                            <input
-                              type="file"
-                              accept=".geojson,.json"
-                              onChange={(e) => {
-                                const f = e.target.files?.[0];
-                                closeMenu(e);
-                                if (f) void importGeo(f);
-                                e.target.value = "";
-                              }}
-                            />
-                          </label>
-                          {candidate.exclusions.length > 0 && (
-                            <button onClick={(e) => { closeMenu(e); void updateCandidate({ exclusions: [] }); }}>
-                              제외 구역 모두 지우기
-                            </button>
-                          )}
-                          <button className="danger" onClick={(e) => { closeMenu(e); void remove("candidate", candidate.id); }}>
-                            후보지 삭제
-                          </button>
-                        </>
-                      )}
-                      <span className="menu-label">설계 대안</span>
-                      <button disabled={!candidate} onClick={(e) => { closeMenu(e); void addDesign(); }}>
-                        새 대안 추가
-                      </button>
-                      {design && (
-                        <>
-                          <button onClick={(e) => { closeMenu(e); void duplicateDesign(); }}>대안 복제</button>
-                          <button className="danger" onClick={(e) => { closeMenu(e); void remove("design", design.id); }}>
-                            대안 삭제
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </details>
-                  <div className="context-right">
-                    {history.length > 1 && (
-                      <select
-                        aria-label="분석 이력"
-                        value={chosenRunId}
-                        onChange={(e) => setHistoryId(e.target.value)}
-                      >
-                        {history.map((r) => (
-                          <option key={r.id} value={r.id}>
-                            {date(r.created_at)} ·{" "}
-                            {r.status === "completed" ? "완료" : r.status === "failed" ? "실패" : "계산 중"}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                    <span
-                      className={
-                        "status " +
-                        (currentPending ? "pending" : activeRun?.status === "completed" ? "done" : "")
-                      }
-                    >
-                      {currentPending ? "계산 중" : activeRun?.status === "completed" ? "분석 완료" : "분석 전"}
-                    </span>
-                  </div>
+              <div className="wizard">
+                <Stepper current={step} reachable={reachable} onSelect={goTo} />
+                <div className="wizard-head">
+                  <span className="wizard-count">
+                    {step + 1}단계 / {WIZARD_STEPS.length}
+                  </span>
+                  <h2>{WIZARD_STEPS[step].title}</h2>
+                  <p>{landMode && step === 0 ? "육상 부지 또는 건축물 후보지를 등록하고 경계·제외 구역·연결점과 현장 조건을 지정합니다." : WIZARD_STEPS[step].description}</p>
                 </div>
+                <ReviewOverview
+                  candidate={candidate}
+                  design={draft ?? design}
+                  catalog={catalog}
+                  result={stale ? null : result}
+                  status={runStatus}
+                />
                 {activeRun?.status === "failed" && (
                   <div className="banner error">
                     <span>분석 실패: {activeRun.error}</span>
                     <button onClick={() => void analyze()}>다시 분석</button>
                   </div>
                 )}
-                {stale && (
+                {stale && step >= 2 && (
                   <div className="banner warning">
                     <span>
                       현재 조건이 분석 시점과 다릅니다. 아래 결과는 이전 조건으로
@@ -1048,79 +1134,74 @@ export default function App() {
                     <button onClick={() => void analyze()}>다시 분석</button>
                   </div>
                 )}
-                {result && !stale && <Verdict result={result} />}
-                <div className="stats">
-                  <Stat
-                    label="DC 설비용량"
-                    value={result ? num(result.capacity_dc_kw, 1) : "—"}
-                    unit="kW"
-                    sub={result ? `AC ${num(result.capacity_ac_kw)} kW` : undefined}
-                  />
-                  <Stat
-                    label="연간 발전량"
-                    value={result ? num(result.annual_kwh / 1000, 1) : "—"}
-                    unit="MWh"
-                    sub={
-                      result
-                        ? result.calibration && result.energy_basis === "calibrated"
-                          ? `범위 ${num(result.calibration.annual_p10_kwh / 1000, 0)}–${num(result.calibration.annual_p90_kwh / 1000, 0)}`
-                          : "물리 모델 단독"
-                        : undefined
-                    }
-                  />
-                  <Stat
-                    label="편익·비용비 (B/C)"
-                    badge={result && <GradeBadge grade={gradeOf(result)} />}
-                    value={result ? num(result.economics.bc, 2) : "—"}
-                    sub={result ? `총 공사비 ${num(result.economics.capex / 100000000, 1)}억 원` : undefined}
-                  />
-                  <Stat
-                    label="필요 판매단가"
-                    value={result ? num(result.economics.required_price_per_kwh, 1) : "—"}
-                    unit="원/kWh"
-                    sub={result ? `가정 단가 ${num(result.economics.effective_price_per_kwh, 0)}원` : undefined}
-                  />
-                </div>
-                <div className="segmented" role="tablist" aria-label="검토 화면">
-                  {(
-                    [
-                      ["result", "결과"],
-                      ["map", "지도·배치"],
-                      ["design", "설계 조건"],
-                    ] as const
-                  ).map(([key, label]) => (
-                    <button
-                      key={key}
-                      role="tab"
-                      aria-selected={view === key}
-                      className={view === key ? "active" : ""}
-                      onClick={() => setView(key)}
-                    >
-                      {label}
-                      {key === "design" && dirty && <i className="dot" aria-hidden="true" title="저장 안 됨" />}
-                    </button>
-                  ))}
-                </div>
-                {view === "result" &&
-                  (activeRun?.result ? (
-                    <ReviewSteps run={activeRun} />
-                  ) : (
-                    <div className="card empty">
-                      <h3>아직 분석 결과가 없습니다</h3>
-                      <p>‘설계 조건’을 확인한 뒤 오른쪽 위 ‘분석 실행’을 누르세요.</p>
-                      <button className="btn" onClick={() => setView("design")}>
-                        설계 조건 보기
-                      </button>
-                    </div>
-                  ))}
-                {view === "map" && (
-                  <Card title="수면 후보지" className="map-card">
-                    {!candidate || candidate.geometry ? (
-                      <Suspense fallback={<div className="map-loading">지도를 불러오는 중…</div>}>
+                {step === 0 && (
+                  <>
+                    <div className="workbar">
+                      <label>
+                        <span>후보지</span>
+                        <select
+                          aria-label="후보지 선택"
+                          value={candidateId}
+                          onChange={(e) => {
+                            const id = e.target.value;
+                            setCandidateId(id);
+                            setDesignId(workspace.designs.find((d) => d.candidate_id === id)?.id || "");
+                            setHistoryId("");
+                          }}
+                        >
+                          {workspace.candidates.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name}
+                            </option>
+                          ))}
+                          {!workspace.candidates.length && <option value="">후보지 없음</option>}
+                      </select>
+                    </label>
+                    <details className="dropdown">
+                      <summary className="btn ghost">후보지 관리</summary>
+                      <div className="menu-list">
+                        <button onClick={(e) => { closeMenu(e); newCandidate(); }}>새 후보지 추가</button>
+                        {candidate && (
+                          <>
+                            <button onClick={(e) => { closeMenu(e); setModal({ kind: "candidate", candidate }); }}>
+                              {landMode ? "이름·좌표·현장 조건 수정" : "이름·좌표·수심 수정"}
+                            </button>
+                            {candidate.geometry && (
+                              <button onClick={(e) => { closeMenu(e); exportGeo(); }}>GeoJSON 내보내기</button>
+                            )}
+                            <label>
+                              GeoJSON 가져오기
+                              <input
+                                type="file"
+                                accept=".geojson,.json"
+                                onChange={(e) => {
+                                  const f = e.target.files?.[0];
+                                  closeMenu(e);
+                                  if (f) void importGeo(f);
+                                  e.target.value = "";
+                                }}
+                              />
+                            </label>
+                            {candidate.exclusions.length > 0 && (
+                              <button onClick={(e) => { closeMenu(e); void updateCandidate({ exclusions: [] }); }}>
+                                제외 구역 모두 지우기
+                              </button>
+                            )}
+                            <button className="danger" onClick={(e) => { closeMenu(e); void remove("candidate", candidate.id); }}>
+                              후보지 삭제
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </details>
+                  </div>
+                  <Card title="후보지 선택 · 지상 / 건축물 / 수상" className="map-card">
+                    <Suspense fallback={<div className="map-loading">지도를 불러오는 중…</div>}>
                         <MapView
-                          candidate={candidate && hasGeometry(candidate) ? candidate : null}
+                          terrainMode={terrainMode}
+                          candidate={candidate}
                           result={stale ? null : result}
-                          candidates={mappable}
+                          candidates={workspace.candidates}
                           designs={mapDesigns}
                           runs={workspace.runs}
                           selectedDesignId={designId}
@@ -1133,10 +1214,13 @@ export default function App() {
                           onAddCandidate={newCandidate}
                           onUpdate={candidate ? updateCandidate : async () => {}}
                           onAnalyzeAll={() => void analyze(true)}
-                          onAddWater={newCandidateFromWater}
+                          onAddSite={newCandidateFromSite}
+                          onAnalyzeSite={analyzeMapSite}
+                          onAnalyzeCandidate={analyzeMapCandidate}
+                          analysisBusy={running || workspace.runs.some((run) => run.status === "running" || run.status === "pending")}
                         />
-                      </Suspense>
-                    ) : (
+                    </Suspense>
+                    {candidate && !candidate.geometry && (
                       <div className="reference-site">
                         <strong>경계 없는 실적 재현 후보지</strong>
                         <p>
@@ -1144,9 +1228,12 @@ export default function App() {
                           {num(candidate.longitude, 4)}
                         </p>
                         <p className="hint">
-                          기존 발전소를 설비용량으로 재현해 예측과 실적을 비교합니다. 면적·배치 검토는 생략합니다.
+                          기존 발전소를 설비용량으로 재현해 예측과 실적을 비교합니다. 지도에는 위치 핀만 표시되며 면적·배치 검토는 생략합니다.
                         </p>
                       </div>
+                    )}
+                    {candidate && (
+                      <CandidateWeather candidate={candidate} />
                     )}
                     {candidate && (
                       <dl className="facts">
@@ -1154,6 +1241,7 @@ export default function App() {
                           <dt>배치 모듈</dt>
                           <dd>
                             {num(result?.layout?.module_count)} / {num(result?.layout?.requested_count)}장
+                            {result?.layout?.modules_omitted && " · 대형 부지라 지도 배치 표시는 생략"}
                           </dd>
                         </div>
                         <div>
@@ -1173,30 +1261,208 @@ export default function App() {
                       </dl>
                     )}
                     <p className="hint">
-                      지역을 검색한 뒤 ‘이 지역 수면 찾기’로 저수지·호수를 찾아 클릭하면 후보지로 추가됩니다.
+                      지도를 확대하면 주변 건축물·지상·수상 영역과 아이콘이 표시됩니다. 대상을 클릭하고 ‘이 대상 분석하기’를 누르면 해당 경계로 분석합니다.{" "}
+                      {landMode ? "찾은 경계는 지도 자료이므로 실제 부지·지붕 경계로 다듬고, 후보지 관리에서 이격·음영·경사·지붕 하중을 설정하세요." : "지상 부지·건축물도 같은 프로젝트에서 함께 비교할 수 있습니다."}
                     </p>
                   </Card>
+                  {activeRun?.result && <StepResult run={activeRun} id="site" />}
+                  </>
                 )}
-                {view === "design" &&
-                  (draft ? (
+                {step === 1 && (
+                  <>
+                    <div className="workbar">
+                      <label>
+                        <span>설계 대안</span>
+                        <select
+                          aria-label="설계 대안 선택"
+                          value={designId}
+                          onChange={(e) => setDesignId(e.target.value)}
+                        >
+                          {candidateDesigns.map((d) => (
+                            <option key={d.id} value={d.id}>
+                              {d.name}
+                            </option>
+                          ))}
+                          {!candidateDesigns.length && <option value="">대안 없음</option>}
+                        </select>
+                      </label>
+                      <button className="btn" disabled={!candidate} onClick={() => void addDesign()}>
+                        새 대안 추가
+                      </button>
+                      <button className="btn" disabled={!design} onClick={() => void duplicateDesign()}>
+                        대안 복제
+                      </button>
+                      {design && (
+                        <button className="btn ghost danger-text" onClick={() => void remove("design", design.id)}>
+                          대안 삭제
+                        </button>
+                      )}
+                      <span className="context-right muted">{candidate?.name}</span>
+                    </div>
+                    {draft ? (
+                      <DesignEditor
+                        candidate={candidate}
+                        design={draft}
+                        show={["site", "equipment"]}
+                        catalog={catalog}
+                        onChange={setDraft}
+                        onSave={() => void saveDesign()}
+                        dirty={dirty}
+                        saving={saving}
+                      />
+                    ) : (
+                      <div className="card empty">
+                        <h3>설계 대안이 없습니다</h3>
+                        <button className="btn primary" disabled={!candidate} onClick={() => void addDesign()}>
+                          대안 추가
+                        </button>
+                      </div>
+                    )}
+                    {activeRun?.result && <StepResult run={activeRun} id="equipment" />}
+                  </>
+                )}
+                {step === 2 && (
+                  <>
+                    <section className="card run-panel">
+                      <div>
+                        <h3>
+                          {candidate?.name} · {design?.name}
+                        </h3>
+                        <p className="hint">
+                          후보지 좌표의 ERA5 시간분포에 가까운 기상청 관측소의 월별 일사량·기온을 반영하는 데모 예측입니다.
+                          기존 운영실적 보정·P10–P90는 적용하지 않습니다. 각도별 예상 발전량도 함께 비교합니다.
+                        </p>
+                      </div>
+                      <div className="run-panel-actions">
+                        {history.length > 1 && (
+                          <select
+                            aria-label="분석 이력"
+                            value={chosenRunId}
+                            onChange={(e) => setHistoryId(e.target.value)}
+                          >
+                            {history.map((r) => (
+                              <option key={r.id} value={r.id}>
+                                {date(r.created_at)} ·{" "}
+                                {r.status === "completed" ? "완료" : r.status === "failed" ? "실패" : "계산 중"}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        <span
+                          className={
+                            "status " +
+                            (currentPending ? "pending" : activeRun?.status === "completed" ? "done" : "")
+                          }
+                        >
+                          {currentPending ? "계산 중" : activeRun?.status === "completed" ? "분석 완료" : "분석 전"}
+                        </span>
+                        <button
+                          className="btn primary"
+                          disabled={!design || running || currentPending}
+                          onClick={() => void analyze()}
+                        >
+                          {(running || currentPending) && <span className="spinner" />}
+                          {currentPending ? "분석 진행 중" : activeRun?.result ? "다시 분석" : "분석 실행"}
+                        </button>
+                      </div>
+                    </section>
+                    {activeRun?.result ? (
+                      <>
+                        <StepResult run={activeRun} id="energy" />
+                        {activeRun.result.reference && <ReferenceBacktest reference={activeRun.result.reference} />}
+                      </>
+                    ) : (
+                      <div className="card empty">
+                        <h3>아직 분석 결과가 없습니다</h3>
+                        <p>‘분석 실행’을 누르면 ③~⑥단계가 한 번에 계산되고 다음 단계로 넘어갈 수 있습니다.</p>
+                      </div>
+                    )}
+                  </>
+                )}
+                {step >= 3 && draft && (
+                  <>
+                    {step === 5 && result && !stale && <Verdict result={result} />}
+                    {step === 5 && (
+                      <div className="stats">
+                        <Stat
+                          label="DC 설비용량"
+                          value={result ? num(result.capacity_dc_kw, 1) : "—"}
+                          unit="kW"
+                          sub={result ? `AC ${num(result.capacity_ac_kw)} kW` : undefined}
+                        />
+                        <Stat
+                          label="연간 발전량"
+                          value={result ? num(result.annual_kwh / 1000, 1) : "—"}
+                          unit="MWh"
+                          sub={
+                            result
+                              ? result.calibration && result.energy_basis === "calibrated"
+                                ? `범위 ${num(result.calibration.annual_p10_kwh / 1000, 0)}–${num(result.calibration.annual_p90_kwh / 1000, 0)}`
+                                : "물리 모델 단독"
+                              : undefined
+                          }
+                        />
+                        <Stat
+                          label="편익·비용비 (B/C)"
+                          badge={result && <GradeBadge grade={gradeOf(result)} />}
+                          value={result ? num(result.economics.bc, 2) : "—"}
+                          sub={result ? `총 공사비 ${num(result.economics.capex / 100000000, 1)}억 원` : undefined}
+                        />
+                        <Stat
+                          label="필요 판매단가"
+                          value={result ? num(result.economics.required_price_per_kwh, 1) : "—"}
+                          unit="원/kWh"
+                          sub={result ? `가정 단가 ${num(result.economics.effective_price_per_kwh, 0)}원` : undefined}
+                        />
+                      </div>
+                    )}
                     <DesignEditor
+                      candidate={candidate}
                       design={draft}
+                      show={[step === 3 ? "costs" : step === 4 ? "revenue" : "finance"]}
                       onChange={setDraft}
                       onSave={() => void saveDesign()}
                       dirty={dirty}
                       saving={saving}
                     />
+                    {activeRun?.result && (
+                      <StepResult run={activeRun} id={WIZARD_STEPS[step].id} />
+                    )}
+                  </>
+                )}
+                <div className="wizard-nav">
+                  <button className="btn outline" disabled={step === 0} onClick={() => void goTo(step - 1)}>
+                    이전
+                  </button>
+                  <p className="wizard-hint" role="status">
+                    <span className="wizard-hint-step">
+                      {step + 1}/{WIZARD_STEPS.length}
+                    </span>
+                    {nextHint}
+                  </p>
+                  {stale && step >= 2 && !currentPending && (
+                    <button className="btn" disabled={running} onClick={() => void analyze()}>
+                      다시 분석
+                    </button>
+                  )}
+                  {step < WIZARD_STEPS.length - 1 ? (
+                    <button
+                      className="btn primary"
+                      disabled={step >= reachable || saving}
+                      onClick={() => void goTo(step + 1)}
+                    >
+                      다음
+                    </button>
                   ) : (
-                    <div className="card empty">
-                      <h3>설계 대안이 없습니다</h3>
-                      <button className="btn primary" disabled={!candidate} onClick={() => void addDesign()}>
-                        대안 추가
-                      </button>
-                    </div>
-                  ))}
-              </>
+                    <button className="btn primary" onClick={() => setPage("report")}>
+                      검토 보고서 보기
+                    </button>
+                  )}
+                </div>
+              </div>
             )}
             {page === "data" && <PlantRecords onError={handleError} />}
+            {page === "assets" && <SolarTech onImport={importAsset} runs={workspace.runs} />}
             {page === "model" && <ModelValidation onError={handleError} />}
             {page === "weather" && <WeatherValidation onError={handleError} />}
             {page === "compare" && (
@@ -1280,6 +1546,7 @@ export default function App() {
                 onError={handleError}
               />
             )}
+            {page === "compare" && comparisonOutdated && <p className="inline-warning">비교 대상 중 입력 조건이 변경된 결과가 있습니다. 표시값은 각 분석 시점의 스냅샷 기준입니다. 최신 조건으로 비교하려면 다시 분석하세요.</p>}
             {page === "report" &&
               (result ? (
                 <>
@@ -1309,6 +1576,7 @@ export default function App() {
                   </div>
                   <ReportBody
                     run={activeRun!}
+                    outdated={stale}
                     appendix={
                       <>
                         <Cashflow run={activeRun!} />
@@ -1324,11 +1592,27 @@ export default function App() {
             <footer className="footer">
               사전 검토용 결과입니다. 상세 설계와 인허가 검증은 별도로
               필요합니다. · 기상 {String(health.weather || "ERA5")} · 운영실적 보정{" "}
-              {String(health.calibration || "없음")} · 수면 v2.0
+              {result?.weather_station?.selected ? "미적용 · 관측소 프로파일 데모" : landMode ? "미적용 · 육상·건축물 물리 모델" : String(health.calibration || "없음")} · SolarTech
             </footer>
           </>
         )}
       </main>
+      {guideOpen && (
+        <GuidePanel
+          terrainMode={terrainMode}
+          guideKey={!workspace ? "start" : page === "review" ? WIZARD_STEPS[step].id : page}
+          where={
+            !workspace
+              ? "시작하기"
+              : page === "review"
+                ? `${pageInfo.label} · ${step + 1}단계 / ${WIZARD_STEPS.length}`
+                : pageInfo.label
+          }
+          title={!workspace ? "첫 프로젝트 만들기" : page === "review" ? WIZARD_STEPS[step].title : pageInfo.title}
+          onClose={() => setGuideOpen(false)}
+          onOpenHelp={() => setModal({ kind: "help" })}
+        />
+      )}
       {modal && (
         <div
           className="modal-backdrop"
@@ -1372,36 +1656,34 @@ export default function App() {
             ) : modal.kind === "candidate" ? (
               <CandidateForm
                 candidate={modal.candidate}
-                onSubmit={(v) => void saveCandidate(v, modal.isNew)}
+                onSubmit={(v) => void saveCandidate(v, modal.isNew, modal.useBoundary)}
               />
             ) : (
               <div className="help">
                 <ol>
                   <li>
-                    지역으로 이동한 뒤 <b>이 지역 수면 찾기</b>를 누르고, 파란
-                    저수지·호수를 클릭해 <b>후보지로 추가</b>합니다. 실제 수면
-                    경계와 섬이 그대로 들어갑니다.
+                    <b>지도에서 새 위치 선택</b>으로 후보지를 추가하고 <b>설치장소 유형</b>에서 지상·건축물·수상을 고릅니다.
+                    저수지·유휴 부지·대형 지붕 경계는 <b>이 지역 후보 찾기</b>(수상·지상·건축물)로 가져올 수 있습니다. 선택 좌표와 자동 연결 관측소를 확인하세요.
                   </li>
                   <li>
-                    지도 위 <b>경계 그리기</b>로 수면 경계를, <b>제외 구역</b>
+                    지도 위 <b>경계 그리기</b>로 {landMode ? "부지·지붕" : "수면"} 경계를, <b>제외 구역</b>
                     으로 설치하지 않을 곳을, <b>연결점</b>으로 육상 전력
                     연결 위치를 지정합니다.
                   </li>
                   <li>
-                    오른쪽 패널에서 가이드라인 단계별(① 대상지 · ② 기자재 · ④
-                    공사비 · ⑤⑥ 수익·재무) 조건을 입력하고 저장합니다.
+                    <b>다음</b>을 눌러 ② 설계 대안·기자재 조건을 정하고, ③에서{" "}
+                    <b>분석 실행</b>을 누릅니다. 다음으로 넘어갈 때 입력한 조건이 저장됩니다.
                   </li>
                   <li>
-                    <b>분석 실행</b>을 누르면 ①~⑥ 단계 결과와 필요 판매단가,
-                    발전량 감소 시 B/C를 확인할 수 있습니다.
+                    ④ 공사비 · ⑤ 수익 · ⑥ 재무 단계에서 조건을 고치고 결과를 확인합니다. 조건을
+                    바꾸면 <b>다시 분석</b>으로 반영하고, 마지막 단계에서 결론과 보고서를 봅니다.
                   </li>
                 </ol>
                 <p className="hint">
-                  발전량은 후보지 위치의 1991~2020년(기상청 평년 기간, 30년) ERA5
-                  시간자료를 기상청 일사계로 보정해 pvlib으로 계산한 뒤, K-water 운영
-                  발전소 27곳의 실적으로 검증한 보정 모델을 적용합니다. 근거는 왼쪽
-                  ‘근거 데이터’ 메뉴에서 확인합니다. 처음 분석하는 위치는 30년치
-                  기상자료를 내려받느라 1분가량 걸립니다.
+                  발전량은 가까운 관측소의 월별 일사량·기온에 ERA5 시간분포를 결합한 데모 예측입니다.
+                  관측소 프로파일 사용 시 기존 운영실적 보정·P10–P90를 적용하지 않습니다.
+                  면적 또는 목표 용량을 입력하고 경사각·방위각을 바꿔 다시 분석하면 예상 발전량을 비교할 수 있습니다.
+                  매출은 예측 판매전력량 × 사용자 판매단가이며, 부력·계류·음영·구조·인허가는 상세 검토가 필요합니다.
                 </p>
                 <h3>용어 설명</h3>
                 <dl className="glossary">
@@ -1554,7 +1836,7 @@ function Comparison({
     : ([
         grade,
         [
-          "후보 수면 면적",
+          "후보지 면적",
           "ha",
           (r: Run) =>
             r.result!.layout ? num(r.result!.layout.area_m2 / 10000, 2) : "경계 없음",
@@ -1626,7 +1908,7 @@ function Comparison({
             ] as const,
         ),
         ["기상자료", "", (r: Run) => r.result!.provenance.weather_source],
-        ["미확인 조건", "", () => "인허가·계통·구조·수심"],
+        ["미확인 조건", "", (r: Run) => r.snapshot.candidate.site_type === "floating" ? "인허가·계통·구조·수심" : "인허가·계통·지형·지붕 구조"],
       ] as const);
   return (
     <div

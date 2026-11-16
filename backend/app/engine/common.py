@@ -32,7 +32,7 @@ def integer(values, key, default=None, minimum=None, maximum=None):
 
 
 def capacities(equipment):
-    count = integer(equipment, "module_count", minimum=0, maximum=100000)
+    count = integer(equipment, "module_count", minimum=0, maximum=200000)
     power = number(equipment, "module_power_w", minimum=1, maximum=2000)
     dc = power * count / 1000
     ac = number(equipment, "ac_capacity_kw", default=dc / 1.15, minimum=0)

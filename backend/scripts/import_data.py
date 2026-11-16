@@ -1,7 +1,10 @@
 """Import the raw data folder into backend/data (raw files are only read).
 
 Usage (from backend/):
-    .venv/Scripts/python.exe scripts/import_data.py "C:/.../solar model/v1_official_pipeline/data/raw"
+    .venv/Scripts/python.exe scripts/import_data.py
+    .venv/Scripts/python.exe scripts/import_data.py "<다른 원본 자료 폴더>"
+
+Without an argument, reads the repository's data/ folder (independent of cwd).
 
 Subfolders are searched for:
   * 월간보고서_YYYYMM.xls        아산정수장 일 발전량 (HTML 표)
@@ -20,15 +23,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import kma, kwater  # noqa: E402
 
+DEFAULT_SOURCE_DIR = Path(__file__).resolve().parents[2] / "data"
+
 
 def find(folder, pattern):
     return sorted(glob.glob(os.path.join(folder, "**", pattern), recursive=True))
 
 
 def main():
-    if len(sys.argv) != 2:
+    if len(sys.argv) > 2:
         raise SystemExit(__doc__)
-    folder = sys.argv[1]
+    folder = sys.argv[1] if len(sys.argv) == 2 else str(DEFAULT_SOURCE_DIR)
     plants, daily = kwater.build_dataset(folder)
     kwater.write_dataset(plants, daily)
     flags = Counter(row["flag"] for row in daily)

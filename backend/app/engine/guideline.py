@@ -7,6 +7,7 @@ those stay user-entered cost assumptions in the design inputs.
 
 import math
 
+from . import catalog
 from .common import integer, number
 
 SOURCE = "K-water 태양광에너지 표준설계모델 가이드라인"
@@ -15,10 +16,10 @@ SOURCE = "K-water 태양광에너지 표준설계모델 가이드라인"
 MODULES = {
     "floating_450": {"label": "수상용 단결정 450 Wp (친환경 고효율, IP67·Pb Free)", "module_power_w": 450,
                      "module_width_m": 1.030, "module_height_m": 2.171, "module_price": 225000,
-                     "source": "표 3-8·3-9 수상용 모듈"},
+                     "short_label": "가이드라인 수상용", "source": "표 3-8·3-9 수상용 모듈"},
     "land_480": {"label": "육상용 단결정 480 Wp (Half-cut)", "module_power_w": 480,
                  "module_width_m": 1.043, "module_height_m": 2.275, "module_price": 230400,
-                 "source": "표 3-9 육상용 모듈"},
+                 "short_label": "가이드라인 육상용", "source": "표 3-9 육상용 모듈"},
 }
 
 # 표 3-13 example (480 Wp): Vmp 44.81 V, Voc 53.61 V, voltage coefficient −0.27 %/°C.
@@ -190,8 +191,27 @@ def string_design(module_count, electrical):
             "warnings": warnings}
 
 
-def inverter_design(dc_kw, configuration="auto"):
+def catalog_inverter_design(dc_kw, model_id, configuration="auto", parallel=None):
+    """One catalog string-inverter model, enough units for AC ≥ DC (표 3-12 sizing rule)."""
+    model = catalog.INVERTERS[model_id]
+    count = max(1, math.ceil(dc_kw / model["kw"] - 1e-9))
+    rule = f"카탈로그 {model['model']}: AC 용량 ≥ DC 용량이 되는 최소 대수"
+    if configuration == "multi" and count < 2:
+        count, rule = 2, f"카탈로그 {model['model']}: 멀티구성 (사용자 선택, 최소 2대)"
+    warnings = []
+    if model["channels"] and parallel and parallel > model["channels"] * count:
+        warnings.append(f"직렬군 {parallel}개 > {model['model']} 입력 채널 {model['channels']}CH × {count}대: "
+                        "대수를 늘리거나 접속반이 필요합니다.")
+    return {"units": [{"kw": model["kw"], "count": count, "unit_cost": model["unit_cost"], "model": model["model"]}],
+            "ac_capacity_kw": float(model["kw"] * count), "unit_count": count, "cost": model["unit_cost"] * count,
+            "rule": rule, "model_id": model_id, "junction_boxes": [], "junction_box_count": 0,
+            "basis": f"{model['source']} 제원 · {model['price_basis']}", "warnings": warnings}
+
+
+def inverter_design(dc_kw, configuration="auto", model_id=None, parallel=None):
     """표 3-12: multi-unit (≥2) at least cost unless one unit saves more than 20 %."""
+    if model_id in catalog.INVERTERS:
+        return catalog_inverter_design(dc_kw, model_id, configuration, parallel)
     options = []
     # Within the table's 1 MW range multi-unit rows combine only 100/500 kW units;
     # 1,000 kW units appear there only as the single-unit option.
@@ -251,10 +271,21 @@ def energy_substitution(annual_kwh):
 def resolve_equipment(equipment, factors):
     """Apply guideline module presets and automatic tilt to a design's equipment."""
     resolved = dict(equipment)
-    preset = MODULES.get(resolved.get("module_preset"))
+    preset = MODULES.get(resolved.get("module_preset")) or catalog.MODULES.get(resolved.get("module_preset"))
     if preset:
+        resolved["module_model"] = preset["label"]
+        resolved["module_manufacturer"] = preset.get("manufacturer", "미지정 (가이드라인 예시)")
+        resolved["module_source"] = preset["source"]
         for key in ("module_power_w", "module_width_m", "module_height_m", "module_price"):
             resolved[key] = preset[key]
+    if resolved.get("module_preset") in catalog.MODULES:
+        resolved["module_model"] = preset["label"]
+        resolved.update({key: preset[key] for key in catalog.ELECTRICAL_KEYS})
+        resolved["electrical_source"] = preset["source"]
+    model = catalog.INVERTERS.get(resolved.get("inverter_model"))
+    if model:
+        # The physics model uses the catalog European (weighted) efficiency.
+        resolved["inverter_efficiency"] = model["euro_efficiency_pct"] / 100
     if resolved.get("tilt_mode", "guideline") == "guideline":
         resolved["tilt"] = factors["optimal_tilt"]
     if resolved.get("structure_type") == "seasonal":

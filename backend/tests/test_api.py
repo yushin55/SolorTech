@@ -59,6 +59,17 @@ def completed_run(client, monkeypatch, result=None):
     pytest.fail("background run did not finish")
 
 
+def test_large_layouts_keep_counts_but_not_outlines():
+    from app.main import MAX_LAYOUT_POLYGONS, compact_layout
+
+    small = {"layout": {"modules": [{}] * MAX_LAYOUT_POLYGONS, "module_count": MAX_LAYOUT_POLYGONS}}
+    large = {"layout": {"modules": [{}] * (MAX_LAYOUT_POLYGONS + 1), "module_count": MAX_LAYOUT_POLYGONS + 1}}
+    assert not compact_layout(small) and len(small["layout"]["modules"]) == MAX_LAYOUT_POLYGONS
+    assert compact_layout(large) and large["layout"] == {"modules": [], "module_count": MAX_LAYOUT_POLYGONS + 1,
+                                                         "modules_omitted": True}
+    assert not compact_layout({"layout": None}) and not compact_layout(None)
+
+
 def test_seed_catalog_and_crud_persistence(client, repository):
     health = client.get("/api/health").json()
     assert health["storage"] == "local" and "ERA5" in health["weather"]
@@ -68,10 +79,13 @@ def test_seed_catalog_and_crud_persistence(client, repository):
     assert not any("가상" in name for name in names)
     asan = next(candidate for candidate in data["candidates"] if candidate.get("reference_plant_id"))
     assert asan["geometry"] is None and asan["site_type"] == "plant"
-    assert len(data["designs"]) == 5
+    extra = [candidate for candidate in data["candidates"] if candidate["site_type"] in ("land", "rooftop")]
+    assert all("미검증" in candidate["name"] and candidate["geometry"] for candidate in extra)
+    assert len(data["designs"]) == 5 + len(extra)
     assert data["runs"] == []
     catalog = client.get("/api/catalogs").json()
-    assert {module["id"] for module in catalog["modules"]} == {"floating_450", "land_480"}
+    assert {module["id"] for module in catalog["modules"]} == {"floating_450", "land_480", "hd_his_t650uj"}
+    assert {item["model"] for item in catalog["inverters"]} >= {"Q.VOLT P110TA", "Q.VOLT P60TA", "Q.VOLT P125T-X"}
     assert catalog["defaults"]["equipment"]["module_preset"] == "floating_450"
     created = client.post("/api/projects", json={"name": "새 사업", "description": "검토"})
     assert created.status_code == 201
@@ -108,7 +122,8 @@ def test_run_snapshot_duplicate_export_and_cascade(client, repository, monkeypat
     assert "cashflow" in exported.text and "generation" in exported.text
     clone = client.post(f"/api/projects/{run['project_id']}/duplicate").json()
     clone_workspace = client.get(f"/api/projects/{clone['id']}/workspace").json()
-    assert len(clone_workspace["candidates"]) == 3 and len(clone_workspace["designs"]) == 5
+    assert len(clone_workspace["candidates"]) == len(summary["candidates"]) >= 3
+    assert len(clone_workspace["designs"]) == len(summary["designs"]) >= 5
     assert len(clone_workspace["runs"]) == 1
     assert clone_workspace["runs"][0]["id"] != run["id"]
     assert set(item["id"] for item in clone_workspace["designs"]).isdisjoint(item["id"] for item in summary["designs"])
@@ -302,3 +317,26 @@ def test_weather_check_serialises_missing_normals(client):
     if body["normals"]:
         assert len(body["normals"]["months"]) == 12
         assert all(month["ca_tot"] is None for month in body["normals"]["months"])
+
+
+@pytest.mark.parametrize("kind", ["land", "rooftop"])
+def test_terrain_defaults_and_survey_fields_roundtrip(client, kind):
+    project = client.post("/api/projects", json={"name": "육상·건축물 검토"}).json()
+    candidate = client.post(f"/api/projects/{project['id']}/candidates", json={
+        "name": "현장 조사", "latitude": 36.5, "longitude": 127., "site_type": kind,
+        "boundary_setback_m": 2., "shading_loss_pct": 8., "roof_mount": "flush",
+        "roof_tilt_deg": 20., "roof_azimuth_deg": 90., "roof_allowable_load_kg_m2": 25.,
+    })
+    assert candidate.status_code == 201
+    created = client.post(f"/api/projects/{project['id']}/designs", json={
+        "name": "기본안", "candidate_id": candidate.json()["id"], "equipment": {"module_count": 100}})
+    assert created.status_code == 201
+    design = created.json()
+    assert design["equipment"]["module_preset"] == "land_480"
+    assert design["equipment"]["energy_basis"] == "physics"
+    assert design["equipment"]["module_count"] == 100
+    assert design["costs"]["float_per_kw"] == 0
+    assert design["costs"]["structure_per_kw"] > 0
+    data = client.get(f"/api/projects/{project['id']}/workspace").json()
+    assert data["candidates"][0]["roof_azimuth_deg"] == 90
+    assert data["candidates"][0]["boundary_setback_m"] == 2
