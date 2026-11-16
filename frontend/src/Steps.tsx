@@ -19,7 +19,7 @@ import { num } from "./api";
 import type { Result, Run } from "./types";
 
 // Validated categorical order (dataviz validator: all checks pass on white).
-export const series = ["#2563eb", "#0d9488", "#d97706"];
+export const series = ["#005596", "#00B9ED", "#FF9933"];
 export const axis = { fill: "#6b7280", fontSize: 12 };
 export const tooltipStyle = {
   borderRadius: 8,

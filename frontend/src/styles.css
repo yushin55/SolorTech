@@ -9,9 +9,17 @@
   --text: #111827;
   --text-2: #2f3744;
   --muted: #5b6474;
-  --primary: #2563eb;
-  --primary-hover: #1d4ed8;
-  --primary-weak: #eff6ff;
+  /* K-water 브랜드 색상 */
+  --kw-blue: #005596;
+  --kw-light: #00b9ed;
+  --kw-orange: #ff9933;
+  --primary: var(--kw-blue);
+  --primary-hover: #00467c;
+  --primary-weak: #e8f1f8;
+  --accent: var(--kw-light);
+  --accent-weak: #e5f7fd;
+  --highlight: var(--kw-orange);
+  --highlight-weak: #fff3e6;
   --danger: #dc2626;
   --danger-weak: #fef2f2;
   --warn: #b45309;
@@ -86,7 +94,7 @@ input:focus,
 select:focus,
 textarea:focus {
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgb(37 99 235 / 0.15);
+  box-shadow: 0 0 0 3px rgb(0 85 150 / 0.18);
 }
 textarea {
   resize: vertical;
@@ -197,9 +205,16 @@ textarea {
 .brand {
   display: flex;
   flex-direction: column;
+  gap: 6px;
   font-size: 20px;
   font-weight: 700;
   padding: 0 4px;
+}
+.brand img {
+  display: block;
+  width: 200px;
+  max-width: 100%;
+  height: auto;
 }
 .brand small {
   font-size: 12px;
@@ -872,7 +887,7 @@ thead th:first-child {
 }
 .map-search-form:focus-within {
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgb(37 99 235 / 0.15);
+  box-shadow: 0 0 0 3px rgb(0 85 150 / 0.18);
 }
 .map-search-form input {
   border: 0;
@@ -1392,7 +1407,7 @@ thead th:first-child {
   font-size: 14px;
 }
 .site-pin.selected {
-  outline: 3px solid #1d4ed8;
+  outline: 3px solid var(--primary);
   outline-offset: 2px;
 }
 /* ---------- Plain-language layer ---------- */
@@ -1689,12 +1704,12 @@ table tr.active {
 
 /* ---------- Real water bodies ---------- */
 .btn.water {
-  border-color: #0369a1;
-  background: #0369a1;
+  border-color: var(--primary);
+  background: var(--primary);
   color: #fff;
 }
 .btn.water:hover:not(:disabled) {
-  background: #075985;
+  background: var(--primary-hover);
 }
 .water-card {
   position: absolute;
@@ -1708,7 +1723,7 @@ table tr.active {
   width: max-content;
   max-width: calc(100% - 24px);
   padding: 10px 10px 10px 16px;
-  border: 2px solid #0369a1;
+  border: 2px solid var(--primary);
   border-radius: 12px;
   background: var(--surface);
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.2);
@@ -1750,7 +1765,7 @@ table tr.active {
   gap: 10px;
 }
 .water-list li button {
-  border-left: 4px solid #38bdf8;
+  border-left: 4px solid var(--accent);
 }
 .panel-status {
   display: flex;
@@ -2690,8 +2705,8 @@ details.step:not([open]) .step-summary {
   background: var(--surface);
 }
 .site-card.picked {
-  border-color: #ef4444;
-  box-shadow: 0 0 0 3px #fee2e2;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-weak);
 }
 .site-card p {
   color: var(--muted);
@@ -2767,7 +2782,7 @@ details.step:not([open]) .step-summary {
   box-shadow: 0 0 0 1px rgb(0 0 0 / 0.15);
 }
 .site-legend i.pin {
-  background: #f97316;
+  background: var(--highlight);
   border-radius: 50% 50% 50% 0;
   transform: rotate(-45deg);
 }
@@ -2777,7 +2792,7 @@ details.step:not([open]) .step-summary {
   height: 22px;
   border-radius: 50% 50% 50% 0;
   transform: rotate(-45deg);
-  background: #f97316;
+  background: var(--highlight);
   border: 2px solid #fff;
   box-shadow: 0 1px 4px rgb(0 0 0 / 0.35);
 }
@@ -2788,7 +2803,7 @@ details.step:not([open]) .step-summary {
   margin: -4px 0 0 -2px;
 }
 .pick-pin.picked span {
-  background: #ef4444;
+  background: var(--accent);
 }
 .site-editor {
   grid-column: 1 / -1;

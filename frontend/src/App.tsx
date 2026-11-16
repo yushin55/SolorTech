@@ -64,7 +64,7 @@ type Modal =
   | { kind: "candidate"; candidate: Candidate; isNew?: boolean }
   | { kind: "help" }
   | null;
-const colors = ["#2563eb", "#0d9488", "#d97706", "#7c3aed", "#db2777"];
+const colors = ["#005596", "#00B9ED", "#FF9933", "#0d9488", "#7c3aed"];
 const icons: Record<Page, LucideIcon> = {
   review: ClipboardCheck,
   compare: GitCompareArrows,
@@ -921,7 +921,7 @@ export default function App() {
             setPage("review");
           }}
         >
-          수면
+          <img src="/kwater-logo.png" alt="K-water 한국수자원공사" width="200" height="35" />
           <small>수상태양광 사업성 검토</small>
         </a>
         <nav className="nav" aria-label="화면">
@@ -1323,7 +1323,7 @@ export default function App() {
             <footer className="footer">
               사전 검토용 결과입니다. 상세 설계와 인허가 검증은 별도로
               필요합니다. · 기상 {String(health.weather || "ERA5")} · 운영실적 보정{" "}
-              {String(health.calibration || "없음")} · 수면 v2.0
+              {String(health.calibration || "없음")} · v2.0
             </footer>
           </>
         )}

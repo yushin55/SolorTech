@@ -193,7 +193,7 @@ export default function ReportBody({ run, appendix }: { run: Run; appendix: Reac
       </details>
 
       <footer className="report-bottom">
-        수면 · 수상태양광 사업성 검토
+        K-water · 수상태양광 사업성 검토
         <span>사전 검토용 자료이며 설치 확정·투자 수익 보장이 아닙니다.</span>
       </footer>
     </article>

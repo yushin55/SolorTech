@@ -22,8 +22,8 @@ type Props = {
 };
 
 const PLANT_COLOR: Record<string, string> = {
-  floating: "#0d9488",
-  plant: "#2563eb",
+  floating: "#00B9ED",
+  plant: "#005596",
   basin: "#7c3aed",
   land: "#d97706",
   unknown: "#6b7280",

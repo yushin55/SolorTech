@@ -316,7 +316,7 @@ export default function MapView({
         };
         L.geoJSON(c.geometry, {
           style: {
-            color: selected ? "#1d4ed8" : info.color,
+            color: selected ? "#005596" : info.color,
             fillColor: info.color,
             fillOpacity: row.run ? 0.3 : 0.12,
             weight: selected ? 3 : 2,
@@ -370,7 +370,7 @@ export default function MapView({
           : candidates.find((c) => c.id === p.id);
       const polygon = L.geoJSON(f, {
         style: {
-          color: selected ? "#1d4ed8" : p.color,
+          color: selected ? "#005596" : p.color,
           fillColor: p.color,
           fillOpacity: available && metric !== "none" ? 0.35 : 0.12,
           weight: selected ? 3 : 1.5,
@@ -624,7 +624,7 @@ export default function MapView({
     if (!target || !map.current || !ready) return;
     const marker = L.circleMarker([target.latitude, target.longitude], {
       radius: 6,
-      color: "#1d4ed8",
+      color: "#005596",
       fillColor: "#fff",
       fillOpacity: 1,
       weight: 3,
