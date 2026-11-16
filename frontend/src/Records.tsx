@@ -719,23 +719,70 @@ export function WeatherValidation({ onError }: { onError: (e: unknown) => void }
               <h3>보정계수를 쓸지 정한 방법</h3>
             </div>
             <p>
-              같은 K-water 발전소 27곳으로 <Term name="장소 분리 검증" />을 두 번 했습니다. 선택 모델의
+              같은 K-water 발전소 27곳으로 물리 입력마다 <Term name="장소 분리 검증" />을 했습니다. 선택 모델의
               수상 발전소 월 <Term name="MAPE" />:
             </p>
             <div className="compare-bars">
-              {Object.entries(variants).map(([key, v]) => (
-                <div key={key} className={data.applied === (key === "era5_kma") ? "chosen" : ""}>
-                  <span>{v.label}</span>
-                  <strong>{num(v.score, 2)}%</strong>
-                  {data.applied === (key === "era5_kma") && <em>채택</em>}
-                </div>
-              ))}
+              {Object.entries(variants).map(([key, v]) => {
+                const chosen = (data.selected ?? (data.applied ? "era5_kma" : "era5")) === key;
+                return (
+                  <div key={key} className={chosen ? "chosen" : ""}>
+                    <span>{v.label}</span>
+                    <strong>{num(v.score, 2)}%</strong>
+                    {chosen && <em>채택</em>}
+                  </div>
+                );
+              })}
             </div>
             <p className="hint">
-              비교 관측소가 서울 1곳이라 계절 보정계수를 전국 후보지에 같게 적용합니다. 다른
-              관측소(천안·대전 등) 일사 자료를 추가하면 지역별 보정으로 바꿀 수 있습니다.
+              {data.mode === "nearest"
+                ? "후보지마다 좌표에서 가장 가까운(100 km 이내) 일사계 관측소의 월별 계수를 씁니다. 사업성 검토 3단계에 어느 관측소를 썼는지 표시됩니다."
+                : data.mode === "global"
+                  ? `기상청 ${check.station.name} 1곳의 계수를 전국 후보지에 같게 적용합니다.`
+                  : "보정해도 장소 분리 검증 오차가 줄지 않아 ERA5를 그대로 씁니다."}
             </p>
           </div>
+          {data.stations && data.stations.length > 0 && (
+            <div className="card">
+              <div className="card-heading">
+                <h3>일사계 관측소별 ERA5 비교 ({data.stations.length}곳)</h3>
+                <span className="source-chip">기상청 ASOS 일통계 SI · 같은 기간 ERA5 격자</span>
+              </div>
+              <div className="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>관측소</th>
+                      <th>비교 일수</th>
+                      <th>일별 상관계수</th>
+                      <th>ERA5 치우침</th>
+                      {Object.keys(data.stations[0].factors).map((m) => (
+                        <th key={m}>{m}월</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.stations.map((st) => (
+                      <tr key={st.stn}>
+                        <th>
+                          {st.station.name} ({st.stn})
+                        </th>
+                        <td>{num(st.days)}</td>
+                        <td>{num(st.daily_correlation, 3)}</td>
+                        <td>{num((st.overall_ratio - 1) * 100, 1)}%</td>
+                        {Object.values(st.factors).map((f, i) => (
+                          <td key={i} className={Math.abs(f - 1) > 0.05 ? "emph" : ""}>
+                            {num(f, 2)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="hint">월 칸은 보정계수(관측 ÷ ERA5)입니다. 천안 관측소는 일사계 자료가 없어 일조시간만 있습니다.</p>
+            </div>
+          )}
         </>
       ) : (
         <div className="card empty">

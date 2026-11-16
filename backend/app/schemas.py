@@ -47,7 +47,8 @@ class ProjectPatch(StrictModel):
     description: str | None = Field(default=None, max_length=3000)
 
 
-SiteType = Literal["floating", "plant", "basin", "land"]
+# 설치장소 유형: 지상(평지·경사지) · 건축물(옥상·지붕) · 수상. plant/basin은 K-water 정수장·침전지 기존 시설.
+SiteType = Literal["land", "building", "floating", "plant", "basin"]
 
 
 class CandidateCreate(StrictModel):
@@ -79,8 +80,10 @@ class Equipment(StrictModel):
     tilt_mode: Literal["guideline", "manual"] = "guideline"
     tilt: float = Field(default=30, ge=0, le=90)
     azimuth: float = Field(default=180, ge=90, le=270)
-    module_preset: Literal["floating_450", "land_480", "custom"] = "floating_450"
+    module_preset: Literal["floating_450", "land_480", "qcells_xl_g11s_590", "hdhes_t440nf", "custom"] = "floating_450"
+    module_manufacturer: str = Field(default="", max_length=120)
     module_model: Name = "수상용 단결정 450 Wp (가이드라인 표 3-9)"
+    module_source: str = Field(default="", max_length=300)
     module_power_w: float = Field(default=450, ge=1, le=2000)
     module_width_m: float = Field(default=1.030, ge=.05, le=10)
     module_height_m: float = Field(default=2.171, ge=.05, le=10)
@@ -88,8 +91,13 @@ class Equipment(StrictModel):
     vmp_v: float = Field(default=44.81, gt=0, le=200)
     voc_v: float = Field(default=53.61, gt=0, le=250)
     voltage_temp_coeff_pct: float = Field(default=-.27, ge=-2, le=0)
-    capacity_mode: Literal["count", "area"] = "count"
+    # site_area: 부지 면적 → 설치 가능 모듈 수 · capacity: 목표 총 설비용량 → 필요 모듈 수
+    # count: 모듈 수량 직접(기존 설비 재현) · area: 그린 경계 면적 × 이용률
+    capacity_mode: Literal["site_area", "capacity", "count", "area"] = "count"
     module_count: int = Field(default=2400, gt=0, le=200000)
+    site_area_m2: float = Field(default=10000, gt=0, le=1e8)
+    target_capacity_kw: float = Field(default=1000, gt=0, le=1e6)
+    reserve_pct: float = Field(default=20, ge=0, lt=100)
     area_use_pct: float = Field(default=10, gt=0, le=100)
     array_rows: int = Field(default=1, ge=1, le=6)
     spacing_mode: Literal["guideline", "manual"] = "guideline"
@@ -99,6 +107,7 @@ class Equipment(StrictModel):
     gamma_pdc: float = Field(default=-0.0035, ge=-0.02, le=0)
     inverter_efficiency: float = Field(default=0.96, ge=.5, le=1)
     system_loss_pct: float = Field(default=14, ge=0, lt=100)
+    shading_loss_pct: float = Field(default=0, ge=0, lt=100)
     energy_basis: Literal["calibrated", "physics"] = "calibrated"
 
 
@@ -123,7 +132,8 @@ class Finance(StrictModel):
     discount_pct: float = Field(default=4.5, ge=0, le=50)
     degradation_pct: float = Field(default=0.5, ge=0, le=20)
     sale_mode: Literal["fixed", "smp_rec"] = "fixed"
-    fixed_price: NonNegative = 150
+    # 사용자가 정하는 판매단가: 상·하한 없이 입력(유한한 값만)
+    fixed_price: float = 150
     smp_price: NonNegative = 100
     rec_price: NonNegative = 60000
     rec_weight: float = Field(default=1, ge=0, le=10)
@@ -131,6 +141,7 @@ class Finance(StrictModel):
     self_use_kwh: NonNegative = 0
     retail_price: NonNegative = 0
     stress_pcts: list[float] = Field(default_factory=lambda: [5, 10], max_length=6)
+    price_scenarios: list[float] = Field(default_factory=list, max_length=6)
 
     @field_validator("stress_pcts")
     @classmethod

@@ -445,7 +445,7 @@ it("walks the six-step wizard and warns when the draft changes", async () => {
   expect(cards[0].textContent).toContain("660.0");
   expect(cards[3].textContent).toContain("115.4");
   await goStep(user, /설계 조건/);
-  await user.click(screen.getByRole("tab", { name: "② 기자재" }));
+  await user.click(screen.getByRole("tab", { name: "② 설비·용량" }));
   fireEvent.change(screen.getByRole("spinbutton", { name: "모듈 수량" }), {
     target: { value: "1000" },
   });
@@ -489,7 +489,7 @@ it("duplicates, re-analyses, registers results for comparison and opens a printa
         .value,
     ).toBe("복제안"),
   );
-  await user.click(screen.getByRole("tab", { name: "② 기자재" }));
+  await user.click(screen.getByRole("tab", { name: "② 설비·용량" }));
   const count = screen.getByRole("spinbutton", { name: "모듈 수량" });
   await user.clear(count);
   await user.type(count, "500");
@@ -519,4 +519,19 @@ it("duplicates, re-analyses, registers results for comparison and opens a printa
   expect(within(report).getByRole("heading", { name: /가이드라인 6단계 요약/ })).toBeTruthy();
   expect(within(report).getByText(/15직렬 × 33병렬 = 500장/)).toBeTruthy();
   expect(within(report).getByText(/2025-01-01 ~ 2026-01-01/)).toBeTruthy();
+});
+describe("angle comparison estimate", () => {
+  it("interpolates the analysed tilt × azimuth grid and refuses outside it", async () => {
+    const { estimateAngle } = await import("../src/Editors");
+    const rows = [
+      { tilt: 20, azimuth: 180, poa_kwh_m2: 1, ratio: 1, annual_kwh: 1000, selected: true },
+      { tilt: 20, azimuth: 225, poa_kwh_m2: 1, ratio: 0.9, annual_kwh: 900, selected: false },
+      { tilt: 30, azimuth: 180, poa_kwh_m2: 1, ratio: 1.1, annual_kwh: 1100, selected: false },
+      { tilt: 30, azimuth: 225, poa_kwh_m2: 1, ratio: 1.0, annual_kwh: 1000, selected: false },
+    ];
+    expect(estimateAngle(rows, 20, 180)!.annual_kwh).toBeCloseTo(1000);
+    expect(estimateAngle(rows, 25, 202.5)!.ratio).toBeCloseTo(1.0);
+    expect(estimateAngle(rows, 30, 180)!.annual_kwh).toBeCloseTo(1100);
+    expect(estimateAngle(rows, 40, 180)).toBeNull();
+  });
 });

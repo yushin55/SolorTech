@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import * as L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import type { Candidate, Plant } from "./types";
+import type { Candidate, Plant, WeatherStation } from "./types";
 import { num } from "./api";
 
 type Point = { latitude: number; longitude: number };
@@ -10,6 +10,10 @@ type Props = {
   candidates: Candidate[];
   selectedCandidateId: string;
   picked: Point | null;
+  stations?: WeatherStation[];
+  nearestStation?: WeatherStation | null;
+  /** Point the nearest-station line starts from (picked point or selected candidate). */
+  focus?: Point | null;
   onPlant: (plant: Plant) => void;
   onCandidate: (id: string) => void;
   onPoint: (point: Point) => void;
@@ -29,6 +33,9 @@ export default function SiteMap({
   candidates,
   selectedCandidateId,
   picked,
+  stations = [],
+  nearestStation = null,
+  focus = null,
   onPlant,
   onCandidate,
   onPoint,
@@ -66,6 +73,36 @@ export default function SiteMap({
     const group = layer.current;
     if (!group) return;
     group.clearLayers();
+    for (const st of stations) {
+      const near = nearestStation?.stn === st.stn;
+      const marker = L.marker([st.latitude, st.longitude], {
+        icon: L.divIcon({
+          className: "station-icon" + (near ? " nearest" : ""),
+          html: "<span></span>",
+          iconSize: near ? [18, 18] : [12, 12],
+          iconAnchor: near ? [9, 9] : [6, 6],
+        }),
+        zIndexOffset: near ? 300 : -100,
+        keyboard: false,
+      });
+      marker.bindTooltip(
+        `<b>기상청 ${st.name} 관측소 (${st.stn})</b><br>ASOS · 해발 ${num(st.elevation_m, 0)} m` +
+          (near && nearestStation?.distance_km != null
+            ? `<br>선택 위치에서 ${num(nearestStation.distance_km, 1)} km (가장 가까움)`
+            : ""),
+        { direction: "top", offset: [0, -6] },
+      );
+      marker.addTo(group);
+    }
+    if (focus && nearestStation) {
+      L.polyline(
+        [
+          [focus.latitude, focus.longitude],
+          [nearestStation.latitude, nearestStation.longitude],
+        ],
+        { color: "#7c3aed", weight: 2, dashArray: "6 6", interactive: false },
+      ).addTo(group);
+    }
     for (const p of plants) {
       const marker = L.circleMarker([p.latitude, p.longitude], {
         radius: 7,
@@ -114,7 +151,7 @@ export default function SiteMap({
         zIndexOffset: 2000,
       }).addTo(group);
     }
-  }, [plants, candidates, selectedCandidateId, picked]);
+  }, [plants, candidates, selectedCandidateId, picked, stations, nearestStation, focus?.latitude, focus?.longitude]);
 
   // Center on the selected candidate when it changes.
   useEffect(() => {
@@ -130,6 +167,7 @@ export default function SiteMap({
         <span><i style={{ background: PLANT_COLOR.plant }} />정수장</span>
         <span><i style={{ background: PLANT_COLOR.unknown }} />기타 시설</span>
         <span><i className="pin" />저장된 후보지</span>
+        <span><i className="station" />기상청 관측소</span>
       </div>
     </div>
   );

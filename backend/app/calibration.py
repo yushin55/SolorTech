@@ -85,7 +85,8 @@ def build_dataset(progress=print, factors=None):
     for plant in plants:
         records = daily[daily.plant_id == plant["id"]]
         years = sorted(records.date.dt.year.unique())
-        frame = weather.scale_irradiance(weather.hourly(plant["latitude"], plant["longitude"], years), factors)
+        plant_factors = factors(plant["latitude"], plant["longitude"]) if callable(factors) else factors
+        frame = weather.scale_irradiance(weather.hourly(plant["latitude"], plant["longitude"], years), plant_factors)
         equipment = standard_equipment(plant["tilt"], plant["azimuth"], plant["type"] == "floating")
         series, *_ = interval_energy(equipment, plant["latitude"], plant["longitude"], frame)
         by_day = series.groupby(series.index.tz_localize(None).normalize()).agg(
@@ -243,11 +244,37 @@ def _band(predictions, selected, plants):
             "basis": "장소 분리(leave-one-plant-out) 검증에서 학습에 쓰지 않은 발전소의 실측/예측 비율 분포"}
 
 
-def irradiance_factors():
-    """Station correction factors when the stored calibration adopted them, else None."""
+def irradiance_correction(latitude=None, longitude=None):
+    """Irradiance correction adopted by the stored calibration for a coordinate.
+
+    Returns ``(factors, info)``. In ``nearest`` mode the factors come from the
+    pyranometer station closest to the coordinate (within 100 km); otherwise the
+    single-station (global) factors. ``(None, None)`` when no correction applies.
+    """
+    from . import kma
+
     result = load_result()
     correction = (result or {}).get("weather_correction") or {}
-    return correction.get("factors") if correction.get("applied") else None
+    if not correction.get("applied"):
+        return None, None
+    if correction.get("mode") == "nearest" and latitude is not None:
+        checks = {int(stn): {"station": info["station"], "factors": {int(m): f for m, f in info["factors"].items()}}
+                  for stn, info in (correction.get("station_factors") or {}).items()}
+        near = kma.nearest_correction(latitude, longitude, checks)
+        if near:
+            return near["factors"], {"mode": "nearest", "stn": near["stn"], "name": near["name"],
+                                     "distance_km": near["distance_km"]}
+    factors = correction.get("factors")
+    if not factors:
+        return None, None
+    station = (correction.get("check") or {}).get("station") or {}
+    return {int(m): f for m, f in factors.items()}, {"mode": "global", "stn": station.get("stn"),
+                                                       "name": station.get("name"), "distance_km": None}
+
+
+def irradiance_factors(latitude=None, longitude=None):
+    """Correction factors for a coordinate (see ``irradiance_correction``), else None."""
+    return irradiance_correction(latitude, longitude)[0]
 
 
 def run_calibration(months):

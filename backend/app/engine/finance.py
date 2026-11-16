@@ -48,7 +48,7 @@ def sale_price(finance):
     """KRW/kWh for exported energy. REC inputs are KRW/REC (1 MWh) × weight."""
     mode = finance.get("sale_mode", "fixed")
     if mode == "fixed":
-        return number(finance, "fixed_price", default=150, minimum=0)
+        return number(finance, "fixed_price", default=150)
     if mode == "smp_rec":
         return number(finance, "smp_price", default=100, minimum=0) + number(
             finance, "rec_price", default=70000, minimum=0) / 1000 * number(finance, "rec_weight", default=1, minimum=0)
@@ -112,8 +112,13 @@ def calculate_finance(annual_kwh, capex, costs, finance, purpose="sale"):
         warnings.append("할인 비용 합계가 0이어서 B/C를 계산할 수 없습니다.")
     # Price that makes discounted revenue equal discounted cost over all delivered kWh.
     required = discounted_costs / discounted_energy if discounted_energy > 0 else None
+    total_revenue = sum(row["revenue"] for row in flows)
     return {
         "capex": capex, "annual_opex": opex,
+        "total_revenue": total_revenue,
+        "total_opex": sum(row["opex"] + row["replacement"] for row in flows),
+        # 사업기간 누적 순수익(할인 전) = 매출 합 − 운영·교체비 합 − 초기 투자비
+        "net_profit": flows[-1]["cumulative"],
         "first_year_sales_kwh": flows[1]["sales_kwh"] if years else 0.,
         "first_year_self_use_kwh": flows[1]["self_use_kwh"] if years else 0.,
         "first_year_revenue": flows[1]["revenue"] if years else 0.,

@@ -15,3 +15,13 @@ backend/data/
 *.tsbuildinfo
 firebase-service-account*.json
 service-account*.json
+
+# 원본 데이터는 비공개 데이터 레포(SolorTech-data)에서 관리 — 코드 레포에 올리지 않음
+/아산 태양광 발전량/
+/기상청 지상관측/
+/발전원별*.xlsx
+/기상청API_*.csv
+/monthly_actuals.csv
+/*.pdf
+/docs/*.xlsx
+**/*.xls

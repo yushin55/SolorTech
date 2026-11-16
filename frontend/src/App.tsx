@@ -38,6 +38,7 @@ import type {
   Plant,
   Project,
   Run,
+  Settings,
   SiteType,
   WaterBody,
   Workspace,
@@ -746,7 +747,7 @@ export default function App() {
     if (existing) return selectCandidate(existing.id);
     if (!catalog) return;
     try {
-      const types: SiteType[] = ["floating", "plant", "basin", "land"];
+      const types: SiteType[] = ["floating", "plant", "basin", "land", "building"];
       const siteType = types.includes(plant.type as SiteType) ? (plant.type as SiteType) : "land";
       const c = await mutate<Candidate>(`/projects/${projectId}/candidates`, "POST", {
         name: plant.name,
@@ -798,28 +799,91 @@ export default function App() {
       handleError(e);
     }
   }
-  /** Map click → new candidate at that point (boundary can be drawn later). */
-  function createAtPoint(point: { latitude: number; longitude: number }, name: string) {
-    setModal({
-      kind: "candidate",
-      isNew: true,
-      candidate: {
-        id: "",
-        project_id: projectId,
+  /** Default design for a new site: module and capacity method by installation type. */
+  function designDefaults(siteType: SiteType, targetKw = 1000) {
+    const equipment: Settings = { ...catalog!.defaults.equipment };
+    const costs: Settings = { ...catalog!.defaults.costs };
+    const presetId = siteType === "floating" ? "floating_450" : siteType === "building" ? "hdhes_t440nf" : "land_480";
+    const m = catalog!.modules.find((x) => x.id === presetId);
+    if (m)
+      Object.assign(equipment, {
+        module_preset: m.id,
+        module_manufacturer: m.manufacturer || "",
+        module_model: m.label,
+        module_power_w: m.module_power_w,
+        module_width_m: m.module_width_m,
+        module_height_m: m.module_height_m,
+        module_price: m.module_price,
+        module_source: m.source,
+        ...(m.vmp_v != null && { vmp_v: m.vmp_v, voc_v: m.voc_v, voltage_temp_coeff_pct: m.voltage_temp_coeff_pct, gamma_pdc: m.gamma_pdc }),
+      });
+    if (siteType !== "floating") Object.assign(costs, { float_per_kw: 0, mooring_per_kw: 0 });
+    Object.assign(equipment, { capacity_mode: "capacity", target_capacity_kw: targetKw });
+    return { ...catalog!.defaults, equipment, costs };
+  }
+  /** Map click → candidate saved at that coordinate right away (boundary optional). */
+  async function createAtPoint(
+    point: { latitude: number; longitude: number },
+    name: string,
+    siteType: SiteType,
+  ) {
+    if (!catalog) return;
+    try {
+      const c = await mutate<Candidate>(`/projects/${projectId}/candidates`, "POST", {
         name,
-        latitude: point.latitude,
-        longitude: point.longitude,
+        latitude: Number(point.latitude.toFixed(6)),
+        longitude: Number(point.longitude.toFixed(6)),
         geometry: null,
         exclusions: [],
         grid_point: null,
         cable_distance_m: null,
         water_depth_m: null,
         water_level_m: null,
-        site_type: "floating",
+        site_type: siteType,
         reference_plant_id: null,
-        source: "지도에서 지정한 위치 (경계 없음 · 모듈 수량 기준)",
-      },
+        source: "지도에서 지정한 좌표 (경계 없음)",
+      });
+      const d = await mutate<Design>(`/projects/${projectId}/designs`, "POST", {
+        ...designDefaults(siteType, siteType === "building" ? 100 : 1000),
+        name: "기본안",
+        candidate_id: c.id,
+      });
+      await refreshWorkspace(projectId);
+      setCandidateId(c.id);
+      setDesignId(d.id);
+      setHistoryId("");
+      setNotice(
+        `좌표(위도 ${num(point.latitude, 5)}, 경도 ${num(point.longitude, 5)})를 후보지로 저장했습니다. ‘다음’으로 설비 조건을 입력하세요.`,
+      );
+    } catch (e) {
+      handleError(e);
+    }
+  }
+  async function moveCandidate(point: { latitude: number; longitude: number }) {
+    try {
+      await updateCandidate({
+        latitude: Number(point.latitude.toFixed(6)),
+        longitude: Number(point.longitude.toFixed(6)),
+      });
+    } catch {
+      /* reported by updateCandidate */
+    }
+  }
+  async function changeSiteType(siteType: SiteType) {
+    try {
+      await updateCandidate({ site_type: siteType });
+    } catch {
+      /* reported by updateCandidate */
+    }
+  }
+  function applyAngle(tilt: number, azimuth: number) {
+    if (!draft) return;
+    setDraft({
+      ...draft,
+      equipment: { ...draft.equipment, structure_type: "fixed", tilt_mode: "manual", tilt, azimuth },
     });
+    setStep(2);
+    setNotice(`경사각 ${tilt}° · 방위각 ${azimuth}°로 바꿨습니다. ‘저장하고 분석’을 누르면 다시 계산합니다.`);
   }
   function setRegisteredList(ids: string[]) {
     setRegistered(ids);
@@ -1029,6 +1093,10 @@ export default function App() {
                 onSelectDesign={setDesignId}
                 onPickPlant={pickPlant}
                 onCreateAtPoint={createAtPoint}
+                onMoveCandidate={moveCandidate}
+                onChangeSiteType={changeSiteType}
+                onApplyAngle={applyAngle}
+                catalog={catalog}
                 onEditCandidate={() => candidate && setModal({ kind: "candidate", candidate })}
                 onAddDesign={() => void addDesign()}
                 onDuplicateDesign={() => void duplicateDesign()}

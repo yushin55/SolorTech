@@ -2,8 +2,17 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { Check, ChevronLeft, ChevronRight, MapPin } from "lucide-react";
 import { api, num } from "./api";
-import type { Candidate, Design, Plant, PlantList, Run, Workspace } from "./types";
+import type { Candidate, Catalog, Design, Plant, PlantList, Run, SiteInfo, SiteType, WeatherStation, Workspace } from "./types";
+import { SITE_TYPE_OPTIONS, siteTypeLabel } from "./types";
 import { DesignEditor } from "./Editors";
+import {
+  AngleComparison,
+  AssumptionTable,
+  CapacityPlanCard,
+  CashInflow,
+  ResultSummary,
+  WeatherStationCard,
+} from "./Business";
 import { ReviewSteps, Verdict } from "./Steps";
 import { gradeInfo, gradeOf } from "./mapData";
 
@@ -19,7 +28,6 @@ export const WIZARD_STEPS = [
 ] as const;
 
 type Point = { latitude: number; longitude: number };
-type SiteInfo = { province?: string; nearest_city?: string; optimal_tilt?: number; tilt_basis?: string };
 
 export type WizardProps = {
   step: number;
@@ -40,7 +48,11 @@ export type WizardProps = {
   onSelectCandidate: (id: string) => void;
   onSelectDesign: (id: string) => void;
   onPickPlant: (plant: Plant) => Promise<void>;
-  onCreateAtPoint: (point: Point, name: string) => void;
+  onCreateAtPoint: (point: Point, name: string, siteType: SiteType) => Promise<void>;
+  onMoveCandidate: (point: Point) => Promise<void>;
+  onChangeSiteType: (siteType: SiteType) => Promise<void>;
+  onApplyAngle: (tilt: number, azimuth: number) => void;
+  catalog: Catalog | null;
   onEditCandidate: () => void;
   onAddDesign: () => void;
   onDuplicateDesign: () => void;
@@ -136,11 +148,19 @@ export default function Wizard(p: WizardProps) {
               <button className="btn" onClick={() => p.setStep(2)}>설계 조건으로</button>
             </div>
           ) : p.step === 3 ? (
-            <ReviewSteps run={p.activeRun} only={["site", "equipment", "energy"]} />
+            <div className="stack">
+              <WeatherStationCard result={result} />
+              <CapacityPlanCard result={result} />
+              <AngleComparison result={result} onApply={p.stale ? undefined : p.onApplyAngle} />
+              <ReviewSteps run={p.activeRun} only={["site", "equipment", "energy"]} />
+            </div>
           ) : p.step === 4 ? (
             <ReviewSteps run={p.activeRun} only={["costs"]} />
           ) : p.step === 5 ? (
-            <ReviewSteps run={p.activeRun} only={["revenue"]} />
+            <div className="stack">
+              <CashInflow result={result} />
+              <ReviewSteps run={p.activeRun} only={["revenue"]} />
+            </div>
           ) : (
             <FinalStep {...p} run={p.activeRun} />
           ))}
@@ -176,7 +196,10 @@ export default function Wizard(p: WizardProps) {
 
 function SiteStep(p: WizardProps) {
   const [plants, setPlants] = useState<Plant[]>([]);
+  const [stations, setStations] = useState<WeatherStation[]>([]);
   const [picked, setPicked] = useState<Point | null>(null);
+  const [pickName, setPickName] = useState("");
+  const [pickType, setPickType] = useState<SiteType>("land");
   const [siteInfo, setSiteInfo] = useState<SiteInfo | null>(null);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -186,7 +209,13 @@ function SiteStep(p: WizardProps) {
     void api<PlantList>("/plants")
       .then((r) => setPlants(r.plants))
       .catch(() => setPlants([]));
+    void api<{ stations: WeatherStation[] }>("/weather-stations")
+      .then((r) => setStations(r.stations))
+      .catch(() => setStations([]));
   }, []);
+  useEffect(() => {
+    if (picked && siteInfo?.nearest_city && !pickName) setPickName(`${siteInfo.nearest_city} 후보지`);
+  }, [siteInfo?.nearest_city, picked]);
   useEffect(() => {
     if (!focus) return setSiteInfo(null);
     const { latitude, longitude } = focus;
@@ -268,20 +297,56 @@ function SiteStep(p: WizardProps) {
         {picked ? (
           <div className="site-card picked">
             <strong>지도에서 고른 위치</strong>
-            <p>
-              위도 {num(picked.latitude, 4)} · 경도 {num(picked.longitude, 4)}
+            <p className="coords">
+              위도 {num(picked.latitude, 5)} · 경도 {num(picked.longitude, 5)}
             </p>
             <WeatherLink info={siteInfo} />
             {inKorea(picked) ? (
-              <button
-                className="btn primary block"
-                onClick={() => {
-                  p.onCreateAtPoint(picked, `${siteInfo?.nearest_city || "지정"} 위치 후보지`);
-                  setPicked(null);
-                }}
-              >
-                이 위치를 후보지로 등록
-              </button>
+              <>
+                <label className="field">
+                  <span>후보지 이름</span>
+                  <input
+                    aria-label="새 후보지 이름"
+                    value={pickName}
+                    placeholder="예: 예산 지정 위치"
+                    onChange={(e) => setPickName(e.target.value)}
+                  />
+                </label>
+                <SiteTypeSelect value={pickType} onChange={setPickType} label="설치장소 유형" />
+                <button
+                  className="btn primary block"
+                  disabled={busy || !pickName.trim()}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      await p.onCreateAtPoint(picked, pickName.trim(), pickType);
+                      setPicked(null);
+                      setPickName("");
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  이 위치를 후보지로 등록 (좌표 저장)
+                </button>
+                {p.candidate && !p.candidate.geometry && !p.candidate.reference_plant_id && (
+                  <button
+                    className="btn block"
+                    disabled={busy}
+                    onClick={async () => {
+                      setBusy(true);
+                      try {
+                        await p.onMoveCandidate(picked);
+                        setPicked(null);
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                  >
+                    ‘{p.candidate.name}’ 위치를 여기로 변경
+                  </button>
+                )}
+              </>
             ) : (
               <p className="hint">국내(위도 33~39°, 경도 124~132°) 위치만 분석할 수 있습니다.</p>
             )}
@@ -292,10 +357,23 @@ function SiteStep(p: WizardProps) {
         ) : p.candidate ? (
           <div className="site-card">
             <strong>{p.candidate.name}</strong>
-            <p>
-              위도 {num(p.candidate.latitude, 4)} · 경도 {num(p.candidate.longitude, 4)}
+            <p className="coords">
+              저장된 좌표 · 위도 {num(p.candidate.latitude, 5)} · 경도 {num(p.candidate.longitude, 5)}
               {linkedPlant && <> · 기존 설비 {num(linkedPlant.capacity_kw, 0)} kW</>}
             </p>
+            <SiteTypeSelect
+              value={p.candidate.site_type}
+              disabled={busy}
+              label="설치장소 유형"
+              onChange={async (t) => {
+                setBusy(true);
+                try {
+                  await p.onChangeSiteType(t);
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            />
             <WeatherLink info={siteInfo} />
             {linkedPlant && (
               <p className="hint">K-water 운영실적이 있는 시설이라, 예측과 실제 발전량을 함께 비교합니다.</p>
@@ -350,6 +428,9 @@ function SiteStep(p: WizardProps) {
             candidates={p.workspace.candidates}
             selectedCandidateId={p.candidate?.id || ""}
             picked={picked}
+            stations={stations}
+            nearestStation={siteInfo?.weather_station ?? null}
+            focus={focus}
             onPlant={(plant) => void pickPlant(plant)}
             onCandidate={(id) => {
               setPicked(null);
@@ -364,25 +445,80 @@ function SiteStep(p: WizardProps) {
   );
 }
 
+function SiteTypeSelect({
+  value,
+  onChange,
+  label,
+  disabled,
+}: {
+  value: SiteType;
+  onChange: (t: SiteType) => void;
+  label: string;
+  disabled?: boolean;
+}) {
+  const legacy = !SITE_TYPE_OPTIONS.some((o) => o.value === value);
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <select aria-label={label} value={value} disabled={disabled} onChange={(e) => onChange(e.target.value as SiteType)}>
+        {legacy && <option value={value}>{siteTypeLabel(value)}</option>}
+        {SITE_TYPE_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      <small className="field-note">
+        {value === "floating"
+          ? "설비 단계에서 부유체·계류장치 제원·단가를 입력합니다."
+          : "부유체·계류장치는 계산에서 빠지고, 구조물 단가를 입력합니다."}
+      </small>
+    </label>
+  );
+}
+
 function WeatherLink({ info }: { info: SiteInfo | null }) {
+  const st = info?.weather_station;
   return (
     <dl className="weather-link">
       <div>
-        <dt>기상자료</dt>
-        <dd>이 좌표의 ERA5 1991~2020 시간자료 자동 연동</dd>
+        <dt>기상 관측소</dt>
+        <dd>
+          {st ? (
+            <>
+              <b>
+                {st.name} ({st.stn})
+              </b>{" "}
+              · 후보지에서 {num(st.distance_km ?? 0, 1)} km
+            </>
+          ) : (
+            "좌표를 고르면 가장 가까운 관측소를 찾습니다"
+          )}
+        </dd>
       </div>
-      {info?.province && (
-        <div>
-          <dt>권역</dt>
-          <dd>
-            {info.province} {info.nearest_city}
-          </dd>
-        </div>
-      )}
+      <div>
+        <dt>일사 보정</dt>
+        <dd>
+          {info?.irradiance_station ? (
+            <>
+              가장 가까운 일사계 관측소 <b>{info.irradiance_station.name}</b> ·{" "}
+              {num(info.irradiance_station.distance_km, 1)} km
+            </>
+          ) : (
+            "100 km 안에 일사 관측 자료가 있는 관측소 없음"
+          )}
+        </dd>
+      </div>
+      <div>
+        <dt>예측 기상자료</dt>
+        <dd>이 좌표의 ERA5 1991~2020 시간자료</dd>
+      </div>
       {info?.optimal_tilt != null && (
         <div>
           <dt>최적경사각</dt>
-          <dd>{info.optimal_tilt}° (가이드라인)</dd>
+          <dd>
+            {info.optimal_tilt}° (가이드라인{info.province ? ` · ${info.province}` : ""})
+          </dd>
         </div>
       )}
     </dl>
@@ -416,7 +552,20 @@ function DesignStep(p: WizardProps) {
         <span className="hint">같은 후보지에 조건을 달리한 대안을 여러 개 만들어 비교할 수 있습니다.</span>
       </div>
       {p.draft ? (
-        <DesignEditor design={p.draft} onChange={p.setDraft} onSave={p.onSaveDesign} dirty={p.dirty} saving={p.saving} />
+        <DesignEditor
+          design={p.draft}
+          onChange={p.setDraft}
+          onSave={p.onSaveDesign}
+          dirty={p.dirty}
+          saving={p.saving}
+          context={{
+            candidate: p.candidate,
+            modules: p.catalog?.modules ?? [],
+            angles: p.activeRun?.result?.steps.site.angles ?? null,
+            analysedTilt: p.activeRun?.result?.steps.site.tilt,
+            requiredPrice: p.activeRun?.result?.economics.required_price_per_kwh ?? null,
+          }}
+        />
       ) : (
         <div className="card empty">
           <h3>설계 대안이 없습니다</h3>
@@ -468,7 +617,15 @@ function FinalStep(p: WizardProps & { run: Run }) {
           </div>
         ))}
       </div>
+      <section className="card">
+        <div className="card-heading">
+          <h3>사업성 분석 결과</h3>
+          <span className="muted">현금 유출(투자·운영비) 대비 현금 유입(예측 발전량 × 판매단가)</span>
+        </div>
+        <ResultSummary result={r} />
+      </section>
       <ReviewSteps run={p.run} only={["finance"]} />
+      <AssumptionTable rows={r.assumption_table} />
       <section className="card save-card">
         <div>
           <h3>{p.registered ? "후보지 비교에 등록된 결과입니다" : "결과를 저장하고 비교에 등록하세요"}</h3>

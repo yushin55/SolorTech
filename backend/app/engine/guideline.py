@@ -12,13 +12,36 @@ from .common import integer, number
 SOURCE = "K-water 태양광에너지 표준설계모델 가이드라인"
 
 # 표 3-9: module options (2021). price is KRW per module.
+GUIDELINE_PRICE_PER_W = 225000 / 450   # 표 3-9 수상용 450 Wp 모듈 단가에서 환산한 W당 단가(원)
 MODULES = {
     "floating_450": {"label": "수상용 단결정 450 Wp (친환경 고효율, IP67·Pb Free)", "module_power_w": 450,
                      "module_width_m": 1.030, "module_height_m": 2.171, "module_price": 225000,
-                     "source": "표 3-8·3-9 수상용 모듈"},
+                     "manufacturer": "가이드라인 표준 사양(특정 제조사 아님)",
+                     "source": "K-water 태양광에너지 표준설계모델 가이드라인 표 3-8·3-9 수상용 모듈",
+                     "price_source": "가이드라인 표 3-9", "use": "floating"},
     "land_480": {"label": "육상용 단결정 480 Wp (Half-cut)", "module_power_w": 480,
                  "module_width_m": 1.043, "module_height_m": 2.275, "module_price": 230400,
-                 "source": "표 3-9 육상용 모듈"},
+                 "manufacturer": "가이드라인 표준 사양(특정 제조사 아님)",
+                 "source": "K-water 태양광에너지 표준설계모델 가이드라인 표 3-9 육상용 모듈",
+                 "price_source": "가이드라인 표 3-9", "use": "land"},
+    "qcells_xl_g11s_590": {"label": "Q.PEAK DUO XL-G11S.3/BFG 590", "module_power_w": 590,
+                           "module_width_m": 1.134, "module_height_m": 2.462,
+                           "module_price": round(590 * GUIDELINE_PRICE_PER_W),
+                           "vmp_v": 44.96, "voc_v": 53.60, "voltage_temp_coeff_pct": -.27, "gamma_pdc": -.0034,
+                           "manufacturer": "한화큐셀(Qcells)",
+                           "source": "Qcells 데이터시트 Q.PEAK DUO XL-G11S/BFG 580–595 (2023-01 Rev0), "
+                                     "2462×1134×30 mm, Pmpp 온도계수 −0.34 %/K",
+                           "source_url": "https://solartown.com/content/Qcells_Data_sheet_Q.PEAK_DUO_XL-G11S-BFG_series_30T_580-595_2023-01_Rev0.pdf",
+                           "price_source": "단가 미공개 → 가이드라인 표 3-9 W당 500원 적용 가정", "use": "land"},
+    "hdhes_t440nf": {"label": "HiS-T440NF(BK)", "module_power_w": 440,
+                     "module_width_m": 1.134, "module_height_m": 1.722,
+                     "module_price": round(440 * GUIDELINE_PRICE_PER_W),
+                     "vmp_v": 32.82, "voc_v": 39.90, "voltage_temp_coeff_pct": -.25, "gamma_pdc": -.0029,
+                     "manufacturer": "HD현대에너지솔루션",
+                     "source": "HD현대에너지솔루션 데이터시트 HiS-T430~440NF(BK), 1722×1134×30 mm, "
+                               "Pmax 온도계수 −0.29 %/K",
+                     "source_url": "https://ussolarsupplier.com/cdn/shop/files/SPEC_HiS-T440NF_BK__USSS.pdf",
+                     "price_source": "단가 미공개 → 가이드라인 표 3-9 W당 500원 적용 가정", "use": "building"},
 }
 
 # 표 3-13 example (480 Wp): Vmp 44.81 V, Voc 53.61 V, voltage coefficient −0.27 %/°C.
@@ -253,8 +276,14 @@ def resolve_equipment(equipment, factors):
     resolved = dict(equipment)
     preset = MODULES.get(resolved.get("module_preset"))
     if preset:
-        for key in ("module_power_w", "module_width_m", "module_height_m", "module_price"):
-            resolved[key] = preset[key]
+        for key in ("module_power_w", "module_width_m", "module_height_m", "module_price",
+                    "vmp_v", "voc_v", "voltage_temp_coeff_pct", "gamma_pdc"):
+            if key in preset:
+                resolved[key] = preset[key]
+        resolved.update(module_model=preset["label"], module_manufacturer=preset["manufacturer"],
+                        module_source=preset["source"], module_price_source=preset["price_source"])
+    else:
+        resolved.setdefault("module_price_source", "사용자 입력")
     if resolved.get("tilt_mode", "guideline") == "guideline":
         resolved["tilt"] = factors["optimal_tilt"]
     if resolved.get("structure_type") == "seasonal":

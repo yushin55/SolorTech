@@ -1,5 +1,81 @@
 export type Polygon = { type: "Polygon"; coordinates: number[][][] };
-export type SiteType = "floating" | "plant" | "basin" | "land";
+export type SiteType = "land" | "building" | "floating" | "plant" | "basin";
+/** 설치장소 유형 선택지 (plant/basin은 K-water 정수장·침전지 기존 시설). */
+export const SITE_TYPE_OPTIONS: { value: SiteType; label: string }[] = [
+  { value: "land", label: "지상 (평지·경사지)" },
+  { value: "building", label: "건축물 (옥상·지붕)" },
+  { value: "floating", label: "수상 (댐·저수지)" },
+];
+export const siteTypeLabel = (t: SiteType) =>
+  SITE_TYPE_OPTIONS.find((o) => o.value === t)?.label ??
+  (t === "plant" ? "정수장 부지 (K-water 시설)" : "침전지 상부 (K-water 시설)");
+export type WeatherStation = {
+  stn: number;
+  name: string;
+  latitude: number;
+  longitude: number;
+  elevation_m: number;
+  distance_km?: number;
+};
+export type SiteInfo = {
+  province?: string;
+  nearest_city?: string;
+  optimal_tilt?: number;
+  tilt_basis?: string;
+  weather_station?: WeatherStation;
+  nearby_stations?: WeatherStation[];
+  station_source?: string;
+  irradiance_station?: { stn: number; name: string; distance_km: number } | null;
+};
+export type CapacityPlan = {
+  mode: string;
+  mode_label: string;
+  module_power_w: number;
+  module_footprint_m2: number;
+  module_area_m2: number;
+  row_pitch_m: number;
+  row_gap_m: number;
+  pitch_basis?: string;
+  array_rows: number;
+  requested_modules: number;
+  requested_dc_kw: number;
+  site_area_m2?: number;
+  reserve_pct?: number;
+  usable_area_m2?: number;
+  ground_coverage_pct?: number;
+  target_capacity_kw?: number;
+  modules_used?: number;
+  dc_kw?: number;
+  tilt?: number;
+  string_warnings?: string[];
+};
+export type AngleRow = {
+  tilt: number;
+  azimuth: number;
+  poa_kwh_m2: number;
+  ratio: number;
+  annual_kwh: number;
+  selected: boolean;
+};
+export type PriceScenario = {
+  label: string;
+  kind: "reference" | "user" | "scenario";
+  price_per_kwh: number;
+  first_year_revenue: number;
+  total_revenue: number;
+  net_profit: number;
+  npv: number;
+  bc: number | null;
+  irr_pct: number | null;
+  payback_years: number | null;
+};
+export type AssumptionRow = {
+  group: string;
+  label: string;
+  value: number | string;
+  unit: string;
+  source: string;
+};
 export type Candidate = {
   id: string;
   project_id: string;
@@ -55,6 +131,9 @@ export type Economics = {
   payback_years: number | null;
   effective_price_per_kwh: number;
   required_price_per_kwh: number | null;
+  total_revenue?: number;
+  total_opex?: number;
+  net_profit?: number;
   cashflows: {
     year: number;
     generation_kwh: number;
@@ -91,6 +170,7 @@ export type MonthRow = {
 export type CostItem = {
   key: string;
   label: string;
+  category?: string;
   amount: number;
   basis: string;
   source: string;
@@ -145,6 +225,17 @@ export type Result = {
       tilt: number;
       azimuth: number;
       tilt_mode: string;
+      weather_station?: WeatherStation;
+      nearby_stations?: WeatherStation[];
+      irradiance_station?: { mode: "nearest" | "global"; stn: number | null; name: string | null; distance_km: number | null } | null;
+      weather_basis?: string;
+      angles?: {
+        selected: { tilt: number; azimuth: number };
+        rows: AngleRow[];
+        best: { tilt: number; azimuth: number; ratio: number };
+        seasonal: boolean;
+        basis: string;
+      } | null;
       climate: {
         station: KmaStation;
         distance_km: number;
@@ -175,6 +266,12 @@ export type Result = {
       usable_area_m2: number | null;
       max_modules_by_area: number | null;
       requested_modules: number;
+      plan?: CapacityPlan;
+      module_manufacturer?: string;
+      module_source?: string;
+      module_price_source?: string;
+      shading_loss_pct?: number;
+      system_loss_pct?: number;
       module_count: number;
       pitch: {
         array_length_m: number;
@@ -222,6 +319,10 @@ export type Result = {
       first_year_revenue: number;
       first_year_sales_kwh: number;
       first_year_self_use_kwh: number;
+      monthly?: { month: number; energy_kwh: number; revenue: number }[];
+      scenarios?: PriceScenario[];
+      total_revenue?: number;
+      years?: number;
     };
     substitution: {
       households: number;
@@ -232,6 +333,7 @@ export type Result = {
     };
   };
   economics: Economics;
+  assumption_table?: AssumptionRow[];
   stress: {
     label: string;
     factor: number;
@@ -304,7 +406,15 @@ export type Catalog = {
     module_width_m: number;
     module_height_m: number;
     module_price: number;
+    manufacturer?: string;
     source: string;
+    source_url?: string;
+    price_source?: string;
+    use?: string;
+    vmp_v?: number;
+    voc_v?: number;
+    voltage_temp_coeff_pct?: number;
+    gamma_pdc?: number;
   }[];
   guideline: string;
 };
@@ -445,6 +555,16 @@ export type WeatherCheck = {
     basis: string;
   } | null;
   applied: boolean;
+  mode?: "global" | "nearest" | null;
+  selected?: string | null;
+  stations?: {
+    stn: number;
+    station: KmaStation;
+    days: number;
+    daily_correlation: number;
+    overall_ratio: number;
+    factors: Record<string, number>;
+  }[];
   variants: Record<string, { score: number; label: string }> | null;
   rule: string | null;
   normals: {

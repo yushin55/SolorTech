@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { date, num } from "./api";
 import { MonthlyEnergyChart, ReviewSteps, Term, Verdict } from "./Steps";
 import type { Run } from "./types";
+import { AssumptionTable, CapacityPlanCard, ResultSummary, ScenarioTable, WeatherStationCard } from "./Business";
 
 const eok = (won: number | null | undefined, digits = 1) =>
   won == null ? "—" : `${num(won / 100000000, digits)}억 원`;
@@ -149,7 +150,21 @@ export default function ReportBody({ run, appendix }: { run: Run; appendix: Reac
         </div>
       </Section>
 
-      <Section n={7} title="확인이 필요한 사항">
+      <Section n={7} title="사업성 분석 결과 · 판매단가 시나리오">
+        <ResultSummary result={result} />
+        {result.steps.revenue.scenarios && <ScenarioTable rows={result.steps.revenue.scenarios} />}
+      </Section>
+
+      <Section n={8} title="기상 관측소 · 설비 용량 산정">
+        <WeatherStationCard result={result} />
+        <CapacityPlanCard result={result} />
+      </Section>
+
+      <Section n={9} title="사용한 가정값 · 단위 · 출처">
+        <AssumptionTable rows={result.assumption_table} />
+      </Section>
+
+      <Section n={10} title="확인이 필요한 사항">
         <ul className="report-checks">
           {[...new Set(checks)].map((text, i) => (
             <li key={i}>{text}</li>

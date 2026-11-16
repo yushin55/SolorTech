@@ -24,12 +24,10 @@ NORMALS_FILE = "normals_monthly.csv"
 META_FILE = "meta.json"
 MJ_TO_KWH = 1 / 3.6
 
-STATIONS = {
-    108: {"name": "서울", "latitude": 37.5714, "longitude": 126.9658,
-          "coordinate_basis": "기상청 서울 관측소(종로구 송월동)"},
-    232: {"name": "천안", "latitude": 36.8151, "longitude": 127.1139,
-          "coordinate_basis": "천안시 중심 근사(관측소 정확 좌표 아님)"},
-}
+from .stations import BY_ID as _ASOS, SOURCE as _ASOS_SOURCE
+
+STATIONS = {stn: {"name": row["name"], "latitude": row["latitude"], "longitude": row["longitude"],
+                  "coordinate_basis": _ASOS_SOURCE} for stn, row in _ASOS.items()}
 DAILY_COLUMNS = ["date", "stn", "ta_avg", "ta_max", "ta_max_tm", "ta_min", "ta_min_tm", "hm_avg", "hm_min",
                  "hm_min_tm", "ca_tot", "ss_day", "ss_dur", "si_day", "si_60m_max"]
 
@@ -100,11 +98,46 @@ def load_normals():
     return pd.read_csv(path) if path.exists() else None
 
 
-def irradiance_check():
+MIN_SI_DAYS = 300          # a station needs about a year of pyranometer days to give monthly factors
+MAX_CORRECTION_KM = 100    # beyond this the nearest pyranometer is not treated as representative
+
+
+def irradiance_stations():
+    """Station numbers that have enough pyranometer (SI) days in the imported files."""
+    daily = load_daily()
+    if daily is None:
+        return []
+    counts = daily.dropna(subset=["si_day"]).groupby("stn").size()
+    return sorted(int(stn) for stn, n in counts.items() if n >= MIN_SI_DAYS and station(stn)["latitude"] is not None)
+
+
+def irradiance_checks():
+    """``irradiance_check`` for every station with pyranometer data, keyed by station number."""
+    return {stn: check for stn in irradiance_stations() if (check := irradiance_check(stn))}
+
+
+def nearest_correction(latitude, longitude, checks):
+    """Factors of the nearest pyranometer station within MAX_CORRECTION_KM (coordinate distance)."""
+    from .stations import distance_km
+
+    best = None
+    for stn, check in (checks or {}).items():
+        site = check["station"]
+        distance = distance_km(latitude, longitude, site["latitude"], site["longitude"])
+        if distance <= MAX_CORRECTION_KM and (best is None or distance < best[0]):
+            best = (distance, int(stn), check["factors"])
+    if best is None:
+        return None
+    distance, stn, factors = best
+    return {"stn": stn, "name": station(stn)["name"], "distance_km": distance, "factors": factors}
+
+
+def irradiance_check(stn=None):
     """Compare reanalysis daily GHI with the station pyranometer (SI) day by day.
 
     Returns calendar-month correction factors (observed ÷ reanalysis) and
     agreement metrics, or None when no daily station file is imported.
+    ``stn`` defaults to Seoul (108) when present, else the best-covered station.
     """
     import numpy as np
 
@@ -114,7 +147,13 @@ def irradiance_check():
     if daily is None:
         return None
     daily = daily.dropna(subset=["si_day"])
-    stn = int(daily.stn.mode().iloc[0])
+    if daily.empty:
+        return None
+    if stn is None:
+        stn = 108 if (daily.stn == 108).any() else int(daily.stn.value_counts().idxmax())
+    stn = int(stn)
+    if not (daily.stn == stn).any():
+        return None
     site = station(stn)
     if site["latitude"] is None:
         return None

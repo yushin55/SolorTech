@@ -15,6 +15,7 @@ python -m venv backend/.venv
 backend/.venv/Scripts/python.exe -m pip install -r backend/requirements.lock
 cd backend
 # 최초 1회: K-water 실적·기상청 자료 가져오기 + 보정 모델 생성 (아래 ‘데이터 출처’ 참고)
+# 원본 자료는 이 코드 레포가 아니라 비공개 데이터 레포(SolorTech-data)에 있다. 그 폴더 경로를 넘긴다.
 .venv/Scripts/python.exe scripts/import_data.py "C:/Users/user/Desktop/AI 기후테크/solar model/v1_official_pipeline/data/raw"
 .venv/Scripts/python.exe scripts/build_calibration.py
 .venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
@@ -259,3 +260,13 @@ npm.cmd run build
 ```
 
 가이드라인 표 3-12(인버터 구성)·3-13(직렬 수)·3-23(이격거리)·부록 에너지 대체효과 예시는 테스트로 재현을 확인한다. 엔진 테스트의 기상 입력은 저장소에 캐시된 실제 ERA5 연도를 쓰며, 캐시가 없으면 해당 테스트를 건너뛴다.
+
+
+## 원본 데이터 관리 (배포)
+
+K-water 운영실적·기상청 관측 원본은 **공개 코드 레포에 올리지 않고** 비공개 데이터 레포(`SolorTech-data`)에 둔다.
+Render 서버는 빌드할 때만 그 레포를 내려받아(`backend/scripts/fetch_data.py`) 가공 자료와 보정 모델을 만들고,
+원본은 같은 빌드 단계에서 지운다.
+
+- Render 환경변수 `DATA_REPO` = `<소유자>/SolorTech-data`
+- Render Secret File `data_token` = 데이터 레포 **읽기 전용** GitHub fine-grained 토큰 (BuildKit 시크릿으로만 쓰여 이미지에 남지 않음)

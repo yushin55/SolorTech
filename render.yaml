@@ -16,3 +16,7 @@ services:
         value: local
       - key: WATER_PROVIDER
         value: overpass
+      # 비공개 데이터 레포(소유자/레포). 읽기 토큰은 Render 대시보드 Secret Files에
+      # 이름 "data_token"으로 직접 넣는다(Blueprint에는 비밀값을 적지 않는다).
+      - key: DATA_REPO
+        sync: false
