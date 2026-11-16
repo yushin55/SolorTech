@@ -13,6 +13,8 @@ import type {
   WaterSearch,
 } from "./types";
 import MapSearch from "./MapSearch";
+import { typeIconSvg } from "./typeIcons";
+import type { FindKind } from "./typeIcons";
 import type { SearchLocation } from "./MapSearch";
 import { api, num } from "./api";
 import {
@@ -39,24 +41,32 @@ type Props = {
   onAnalyzeAll?: () => void;
   onAddWater?: (water: WaterBody, siteType: SiteType) => void;
 };
-type FindKind = "water" | "land" | "building";
 // Matches the server's per-request limits (waterbodies.py · sitefinder.py).
-const FIND: Record<FindKind, { width: number; height: number; label: string; obj: string; siteType: SiteType; busy: string; note: string; empty: string }> = {
+const FIND: Record<FindKind, { stroke: string; active: string; fill: string; width: number; height: number; label: string; obj: string; siteType: SiteType; busy: string; note: string; empty: string }> = {
   water: {
+    stroke: "#005596", active: "#003a68", fill: "#00b9ed",
     width: 0.8, height: 0.6, label: "수면", obj: "수면을", siteType: "floating", busy: "저수지·호수 경계",
     note: "점선 사각형 안의 1 ha 이상 저수지·호수·연못입니다.", empty: "이 범위에서 수면을 찾지 못했습니다.",
   },
   land: {
+    stroke: "#a16207", active: "#713f12", fill: "#facc15",
     width: 0.3, height: 0.2, label: "지상 부지", obj: "지상 부지를", siteType: "land", busy: "유휴 부지·주차장 경계",
     note: "점선 사각형 안의 2,000 m² 이상 유휴 부지·주차장·매립지·염전·초지입니다. 농지·임야는 찾지 않습니다.",
     empty: "이 범위에서 지상 부지를 찾지 못했습니다.",
   },
   building: {
+    stroke: "#7e22ce", active: "#581c87", fill: "#c084fc",
     width: 0.1, height: 0.08, label: "건축물", obj: "건축물을", siteType: "building", busy: "건축물 외곽",
     note: "점선 사각형 안의 30 m² 이상 건축물입니다. 지붕 구조·하중·소유는 확인되지 않았습니다.",
     empty: "이 범위에서 건축물을 찾지 못했습니다.",
   },
 };
+const KINDS: FindKind[] = ["water", "land", "building"];
+function TypeIcon({ kind }: { kind: FindKind }) {
+  return <span className="type-icon" dangerouslySetInnerHTML={{ __html: typeIconSvg(kind) }} />;
+}
+type FoundLayer = WaterSearch & { bbox: [number, number, number, number] };
+type Picked = WaterBody & { findKind: FindKind };
 const hectares = (m2: number) => num(m2 / 10000, m2 < 100000 ? 1 : 0);
 const waterName = (w: WaterBody) => w.name || `이름 없는 ${w.kind}`;
 function inRing(x: number, y: number, ring: number[][]) {
@@ -166,13 +176,19 @@ export default function MapView({
     [target, setTarget] = useState<SearchLocation | null>(null),
     [center, setCenter] = useState({ latitude: 36.4, longitude: 127.8 });
   const [findKind, setFindKind] = useState<FindKind>("water");
-  const [water, setWater] = useState<
-    (WaterSearch & { bbox: [number, number, number, number]; kind: FindKind }) | null
-  >(null),
+  const [found, setFound] = useState<Partial<Record<FindKind, FoundLayer>>>({}),
+    [hidden, setHidden] = useState<FindKind[]>([]),
     [waterBusy, setWaterBusy] = useState(false),
     [waterError, setWaterError] = useState(""),
-    [picked, setPicked] = useState<WaterBody | null>(null),
+    [picked, setPicked] = useState<Picked | null>(null),
     [panel, setPanel] = useState<"rank" | "water">("rank");
+  // Water layer alone decides whether a floating candidate sits on mapped water.
+  const water = found.water ?? null;
+  const shownKinds = KINDS.filter((k) => found[k] && !hidden.includes(k));
+  const sites: Picked[] = shownKinds
+    .flatMap((k) => found[k]!.results.map((site) => ({ ...site, findKind: k })))
+    .sort((a, b) => b.area_m2 - a.area_m2);
+  const foundTotal = KINDS.reduce((sum, k) => sum + (found[k]?.total ?? 0), 0);
   const modeRef = useRef(mode),
     overview = useRef(true);
   modeRef.current = mode;
@@ -544,46 +560,55 @@ export default function MapView({
   }, [mode, ready]);
   useEffect(() => {
     const m = map.current;
-    if (!m || !ready || !water) return;
+    if (!m || !ready || !shownKinds.length) return;
     const group = L.layerGroup().addTo(m);
-    const [w, s, e, n] = water.bbox;
-    L.rectangle(
-      [
-        [s, w],
-        [n, e],
-      ],
-      {
-        pane: "water",
-        color: "#0369a1",
-        weight: 1,
-        dashArray: "6 6",
-        fill: false,
-        interactive: false,
-      },
-    ).addTo(group);
-    for (const body of water.results) {
-      const active = picked?.id === body.id;
-      L.geoJSON(body.geometry, {
-        pane: "water",
-        style: {
-          color: active ? "#0c4a6e" : "#0369a1",
-          weight: active ? 3 : 1.5,
-          fillColor: "#38bdf8",
-          fillOpacity: active ? 0.55 : 0.35,
-        },
-        interactive: mode === "view",
-      })
-        .bindTooltip(
-          label(waterName(body), `${body.kind} · ${hectares(body.area_m2)} ha`),
-          { sticky: true, className: "map-label" },
-        )
-        .on("click", () => setPicked(body))
-        .addTo(group);
+    for (const kind of shownKinds) {
+      const layer = found[kind]!,
+        look = FIND[kind];
+      const [w, s, e, n] = layer.bbox;
+      L.rectangle(
+        [
+          [s, w],
+          [n, e],
+        ],
+        { pane: "water", color: look.stroke, weight: 1, dashArray: "6 6", fill: false, interactive: false },
+      ).addTo(group);
+      for (const body of layer.results) {
+        const active = picked?.id === body.id && picked.findKind === kind;
+        const tip = label(waterName(body), `${look.label} · ${body.kind} · ${hectares(body.area_m2)} ha`);
+        L.geoJSON(body.geometry, {
+          pane: "water",
+          style: {
+            color: active ? look.active : look.stroke,
+            weight: active ? 3 : 1.5,
+            fillColor: look.fill,
+            fillOpacity: active ? 0.55 : 0.35,
+          },
+          interactive: mode === "view",
+        })
+          .bindTooltip(tip, { sticky: true, className: "map-label" })
+          .on("click", () => setPicked({ ...body, findKind: kind }))
+          .addTo(group);
+        // A type pin keeps small roofs and plots findable when zoomed out.
+        L.marker([body.latitude, body.longitude], {
+          icon: L.divIcon({
+            className: `type-pin ${kind}${active ? " active" : ""}`,
+            html: typeIconSvg(kind, 13),
+            iconSize: [22, 22],
+            iconAnchor: [11, 11],
+          }),
+          keyboard: false,
+          interactive: mode === "view",
+        })
+          .bindTooltip(tip, { direction: "top", offset: [0, -10], className: "map-label" })
+          .on("click", () => setPicked({ ...body, findKind: kind }))
+          .addTo(group);
+      }
     }
     return () => {
       group.remove();
     };
-  }, [water, picked, mode, ready]);
+  }, [found, hidden, picked, mode, ready]);
   async function findWater() {
     const m = map.current;
     if (!m) return;
@@ -608,7 +633,8 @@ export default function MapView({
       const result = await api<WaterSearch>(
         findKind === "water" ? `/water-bodies?${range}` : `/site-candidates?kind=${findKind}&${range}`,
       );
-      setWater({ ...result, bbox, kind: findKind });
+      setFound((prev) => ({ ...prev, [findKind]: { ...result, bbox } }));
+      setHidden((prev) => prev.filter((k) => k !== findKind));
     } catch (cause) {
       setWaterError(
         cause instanceof Error ? cause.message : `${limit.obj} 찾지 못했습니다.`,
@@ -617,7 +643,7 @@ export default function MapView({
       setWaterBusy(false);
     }
   }
-  function showWater(body: WaterBody) {
+  function showWater(body: Picked) {
     setPicked(body);
     const ring = body.geometry.coordinates[0];
     map.current?.flyToBounds(
@@ -803,20 +829,23 @@ export default function MapView({
         {picked && mode === "view" && (
           <div className="water-card">
             <div>
-              <strong>{waterName(picked)}</strong>
+              <strong>
+                <TypeIcon kind={picked.findKind} /> {waterName(picked)}
+              </strong>
               <span>
-                {picked.kind} · {hectares(picked.area_m2)} ha
+                {FIND[picked.findKind].label} · {picked.kind} · {hectares(picked.area_m2)} ha
               </span>
             </div>
             {onAddWater && (
               <button
                 className="btn primary"
                 onClick={() => {
-                  onAddWater(picked, FIND[water?.kind ?? "water"].siteType);
+                  const { findKind: kind, ...body } = picked;
+                  onAddWater(body, FIND[kind].siteType);
                   setPicked(null);
                 }}
               >
-                이 {FIND[water?.kind ?? "water"].obj} 후보지로 추가
+                이 {FIND[picked.findKind].obj} 후보지로 추가
               </button>
             )}
             <button
@@ -886,7 +915,7 @@ export default function MapView({
         )}
       </div>
       <aside className="rank-panel" aria-label="후보지 사업성 순위">
-        {(water || waterBusy || waterError) && (
+        {(foundTotal > 0 || KINDS.some((k) => found[k]) || waterBusy || waterError) && (
           <div className="panel-tabs" role="tablist">
             <button
               role="tab"
@@ -902,7 +931,7 @@ export default function MapView({
               className={panel === "water" ? "active" : ""}
               onClick={() => setPanel("water")}
             >
-              찾은 {FIND[water?.kind ?? findKind].label}{water ? ` ${water.total}` : ""}
+              찾은 후보 {foundTotal}
             </button>
           </div>
         )}
@@ -921,41 +950,72 @@ export default function MapView({
                   다시 찾기
                 </button>
               </div>
-            ) : water && water.results.length ? (
+            ) : KINDS.some((k) => found[k]) ? (
               <>
-                <p className="rank-note">
-                  {FIND[water.kind].note} 클릭하면 지도에서 보여 주고, 후보지로 추가할 수 있습니다.
-                </p>
-                <ol>
-                  {water.results.map((body) => (
-                    <li key={body.id}>
-                      <button
-                        className={picked?.id === body.id ? "active" : ""}
-                        onClick={() => showWater(body)}
-                      >
-                        <span className="rank-body">
-                          <b>{waterName(body)}</b>
-                          <small>
-                            {body.kind} · {hectares(body.area_m2)} ha
-                          </small>
-                        </span>
-                      </button>
-                    </li>
+                <div className="type-toggles" role="group" aria-label="표시할 후보 유형">
+                  {KINDS.filter((k) => found[k]).map((k) => (
+                    <label key={k} className={`type-toggle ${k}`}>
+                      <input
+                        type="checkbox"
+                        checked={!hidden.includes(k)}
+                        onChange={() =>
+                          setHidden((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]))
+                        }
+                      />
+                      <TypeIcon kind={k} />
+                      {FIND[k].label} {found[k]!.total}
+                    </label>
                   ))}
-                </ol>
-                {water.total > water.results.length && (
-                  <p className="rank-note">
-                    면적이 큰 {water.results.length}곳만 표시합니다. 지도를
-                    확대해 다시 찾으면 더 작은 곳도 볼 수 있습니다.
-                  </p>
+                </div>
+                <p className="rank-note">
+                  아이콘과 색이 설치 유형입니다(물결 수면 · 깃발 지상 부지 · 건물 건축물). 위에서 종류를 바꿔
+                  찾으면 결과가 함께 쌓입니다. 클릭하면 지도에서 보여 주고, 후보지로 추가할 수 있습니다.
+                </p>
+                {sites.length ? (
+                  <ol>
+                    {sites.map((body) => (
+                      <li key={body.findKind + body.id}>
+                        <button
+                          className={picked?.id === body.id && picked.findKind === body.findKind ? "active" : ""}
+                          onClick={() => showWater(body)}
+                        >
+                          <span className={`type-chip ${body.findKind}`}>
+                            <TypeIcon kind={body.findKind} />
+                            {FIND[body.findKind].label}
+                          </span>
+                          <span className="rank-body">
+                            <b>{waterName(body)}</b>
+                            <small>
+                              {body.kind} · {hectares(body.area_m2)} ha
+                            </small>
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <p className="panel-status">선택한 유형에 표시할 후보가 없습니다.</p>
                 )}
+                {KINDS.filter((k) => found[k] && !found[k]!.results.length).map((k) => (
+                  <p className="rank-note" key={k}>
+                    {found[k]!.warning || FIND[k].empty}
+                  </p>
+                ))}
+                {KINDS.filter((k) => found[k] && found[k]!.total > found[k]!.results.length).map((k) => (
+                  <p className="rank-note" key={k}>
+                    {FIND[k].label}은 면적이 큰 {found[k]!.results.length}곳만 표시합니다. 지도를 확대해 다시 찾으면 더 작은
+                    곳도 볼 수 있습니다.
+                  </p>
+                ))}
+                {KINDS.filter((k) => found[k]).map((k) => (
+                  <p className="rank-note" key={k}>
+                    {FIND[k].note} {found[k]!.attribution}
+                  </p>
+                ))}
               </>
             ) : (
-              <p className="panel-status">
-                {water?.warning || FIND[water?.kind ?? findKind].empty}
-              </p>
+              <p className="panel-status">{FIND[findKind].empty}</p>
             )}
-            {water && <p className="rank-note">{water.attribution}</p>}
           </div>
         ) : (
           <>

@@ -44,7 +44,7 @@ import type {
   WaterBody,
   Workspace,
 } from "./types";
-import Wizard from "./Wizard";
+import Wizard, { WIZARD_STEPS } from "./Wizard";
 import { hasGeometry } from "./types";
 import MapView from "./MapLoader";
 import { CandidateForm } from "./Editors";
@@ -56,6 +56,8 @@ import {
 } from "./mapData";
 import Validation from "./Validation";
 import SolarTech from "./SolarTech";
+import { GuidePanel } from "./Guide";
+import type { GuideKey } from "./Guide";
 import type { AssetImportResult, AssetInputs } from "./SolarTech";
 import { ModelValidation, PlantRecords, WeatherValidation } from "./Records";
 import { GLOSSARY } from "./Steps";
@@ -292,6 +294,7 @@ export default function App() {
     [designId, setDesignId] = useState(""),
     [page, setPage] = useState<Page>("review"),
     [step, setStep] = useState(1),
+    [guideOpen, setGuideOpen] = useState(false),
     [registered, setRegistered] = useState<string[]>([]),
     [compareQuery, setCompareQuery] = useState(""),
     [draft, setDraft] = useState<Design | null>(null),
@@ -935,7 +938,7 @@ export default function App() {
   const showRun = page === "report";
   const mappable = workspace?.candidates.filter(hasGeometry) || [];
   return (
-    <div className="app">
+    <div className={"app" + (guideOpen ? " guide-open" : "")}>
       <aside className="sidebar">
         <a
           className="brand"
@@ -1025,6 +1028,16 @@ export default function App() {
               {lastRun ? date(lastRun.created_at) : "없음"}
             </span>
           )}
+          <button
+            className="btn outline guide-toggle"
+            aria-expanded={guideOpen}
+            aria-controls="guide-panel"
+            title="지금 화면에서 무엇을 하는지 설명합니다"
+            onClick={() => setGuideOpen((open) => !open)}
+          >
+            <CircleHelp size={17} aria-hidden="true" />
+            도우미
+          </button>
         </div>
         <header className="page-header">
           <div>
@@ -1354,6 +1367,17 @@ export default function App() {
           </>
         )}
       </main>
+      {guideOpen && (
+        <GuidePanel
+          guideKey={(!workspace ? "start" : page === "review" ? `step${step}` : page) as GuideKey}
+          where={
+            !workspace ? "시작하기" : page === "review" ? `${pageInfo.label} · ${step}단계 / ${WIZARD_STEPS.length}` : pageInfo.label
+          }
+          title={!workspace ? "첫 프로젝트 만들기" : page === "review" ? WIZARD_STEPS[step - 1].title : pageInfo.title}
+          onClose={() => setGuideOpen(false)}
+          onOpenHelp={() => setModal({ kind: "help" })}
+        />
+      )}
       {modal && (
         <div
           className="modal-backdrop"

@@ -3308,3 +3308,184 @@ strong.negative {
 .site-conditions { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--subtle); }
 .site-conditions summary { cursor: pointer; font-weight: 600; margin-bottom: 8px; }
 .site-conditions .fields { margin: 8px 0; }
+
+/* ---------- 설치 유형별 후보 표시 (수면·지상·건축물) ---------- */
+.type-icon { display: inline-flex; vertical-align: -2px; }
+.type-pin { display: grid !important; place-items: center; border-radius: 50%; border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.35); color: #fff; }
+.type-pin.water { background: #005596; }
+.type-pin.land { background: #a16207; }
+.type-pin.building { background: #7e22ce; }
+.type-pin.active { outline: 3px solid var(--highlight); }
+.type-toggles { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.type-toggle { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 999px;
+  border: 1px solid var(--line); font-size: 12.5px; cursor: pointer; background: var(--surface); }
+.type-toggle input { margin: 0; }
+.type-chip { display: inline-flex; align-items: center; gap: 3px; flex: none; padding: 1px 6px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 600; color: #fff; margin-right: 6px; }
+.type-chip.water, .type-toggle.water .type-icon { background: #005596; }
+.type-chip.land, .type-toggle.land .type-icon { background: #a16207; }
+.type-chip.building, .type-toggle.building .type-icon { background: #7e22ce; }
+.type-toggle .type-icon { color: #fff; border-radius: 50%; padding: 2px; }
+/* 저장된 후보지 핀: 설치 유형별 색·아이콘 */
+.pick-pin.kind-water span, .site-legend i.pin.kind-water { background: #005596; }
+.pick-pin.kind-land span, .site-legend i.pin.kind-land { background: #a16207; }
+.pick-pin.kind-building span, .site-legend i.pin.kind-building { background: #7e22ce; }
+.pick-pin span b { display: grid; place-items: center; width: 100%; height: 100%; transform: rotate(45deg); color: #fff; }
+.pick-pin.selected span { outline: 3px solid var(--highlight); }
+
+/* ---------- 도우미 패널 (팀 레포에서 이식) ---------- */
+.guide-toggle {
+  margin-left: auto;
+}
+.topbar-meta + .guide-toggle {
+  margin-left: 0;
+}
+.guide-toggle[aria-expanded="true"] {
+  background: var(--primary);
+  color: #fff;
+}
+.guide-toggle[aria-expanded="true"]:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+.guide-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1200;
+  display: flex;
+  flex-direction: column;
+  width: min(400px, 100vw);
+  border-left: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: -8px 0 24px rgb(17 24 39 / 0.08);
+  outline: none;
+}
+.guide-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px 20px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.guide-where {
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+.guide-head h2 {
+  margin-top: 2px;
+  font-size: 18px;
+  line-height: 1.4;
+  word-break: keep-all;
+}
+.guide-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 18px 20px 24px;
+  overflow-y: auto;
+  font-size: 14px;
+  word-break: keep-all;
+}
+.guide-body h3 {
+  margin-bottom: 8px;
+  font-size: 14px;
+  font-weight: 700;
+}
+.guide-readonly {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--subtle);
+  color: var(--text-2);
+  font-size: 13px;
+}
+.guide-steps {
+  margin: 0;
+  padding: 0;
+  counter-reset: guide;
+  list-style: none;
+}
+.guide-steps li {
+  position: relative;
+  padding-left: 30px;
+  counter-increment: guide;
+}
+.guide-steps li + li {
+  margin-top: 10px;
+}
+.guide-steps li::before {
+  content: counter(guide);
+  position: absolute;
+  top: 1px;
+  left: 0;
+  display: grid;
+  place-items: center;
+  width: 21px;
+  height: 21px;
+  border-radius: 50%;
+  background: var(--primary-weak);
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+.guide-items {
+  margin: 0;
+}
+.guide-items > div {
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.guide-items dt {
+  font-weight: 600;
+}
+.guide-items dd {
+  margin: 2px 0 0;
+  color: var(--muted);
+}
+.guide-tips {
+  margin: 0;
+  padding-left: 18px;
+}
+.guide-tips li + li {
+  margin-top: 8px;
+}
+.guide-foot {
+  padding: 12px 20px;
+  border-top: 1px solid var(--line);
+  font-size: 14px;
+}
+@media (min-width: 1280px) {
+  .app.guide-open {
+    padding-right: 400px;
+  }
+}
+/* The page narrows beside the panel: keep the map usable and the button in place. */
+@media (min-width: 1280px) and (max-width: 1699px) {
+  .app.guide-open .map-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .app.guide-open .rank-panel {
+    max-height: none;
+  }
+  .app.guide-open .topbar-meta {
+    display: none;
+  }
+  .app.guide-open .topbar-meta + .guide-toggle {
+    margin-left: auto;
+  }
+}
+@media print {
+  .guide-panel,
+  .guide-toggle {
+    display: none !important;
+  }
+  .app.guide-open {
+    padding-right: 0;
+  }
+}
+

@@ -3,6 +3,12 @@ import * as L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import type { Candidate, Plant, WeatherStation } from "./types";
 import { num } from "./api";
+import { siteTypeLabel } from "./types";
+import { typeIconSvg } from "./typeIcons";
+
+/** 저장된 후보지 핀의 설치 유형 (수면 · 지상 부지 · 건축물). */
+const pinKind = (siteType: string) =>
+  siteType === "building" ? "building" : siteType === "land" || siteType === "plant" ? "land" : "water";
 
 type Point = { latitude: number; longitude: number };
 
@@ -129,14 +135,14 @@ export default function SiteMap({
       const selected = c.id === selectedCandidateId;
       const marker = L.marker([c.latitude, c.longitude], {
         icon: L.divIcon({
-          className: "pick-pin" + (selected ? " selected" : ""),
-          html: "<span></span>",
+          className: `pick-pin kind-${pinKind(c.site_type)}` + (selected ? " selected" : ""),
+          html: `<span><b>${typeIconSvg(pinKind(c.site_type), 12)}</b></span>`,
           iconSize: [22, 22],
           iconAnchor: [11, 22],
         }),
         zIndexOffset: selected ? 1000 : 500,
       });
-      marker.bindTooltip(`<b>${c.name}</b><br>저장된 후보지<br>${coordText(c)}`, { direction: "top", offset: [0, -20] });
+      marker.bindTooltip(`<b>${c.name}</b><br>저장된 후보지 · ${siteTypeLabel(c.site_type)}<br>${coordText(c)}`, { direction: "top", offset: [0, -20] });
       marker.on("click", (e) => {
         L.DomEvent.stopPropagation(e);
         handlers.current.onCandidate(c.id);
@@ -174,7 +180,9 @@ export default function SiteMap({
         <span><i style={{ background: PLANT_COLOR.floating }} />K-water 수상</span>
         <span><i style={{ background: PLANT_COLOR.plant }} />정수장</span>
         <span><i style={{ background: PLANT_COLOR.unknown }} />기타 시설</span>
-        <span><i className="pin" />저장된 후보지</span>
+        <span><i className="pin kind-water" />수면 후보지</span>
+        <span><i className="pin kind-land" />지상 후보지</span>
+        <span><i className="pin kind-building" />건축물 후보지</span>
         <span><i className="station" />기상청 관측소</span>
       </div>
     </div>
