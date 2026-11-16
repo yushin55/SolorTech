@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app import geocoding, waterbodies
+from app import geocoding, sitefinder, waterbodies
 from app.main import create_app
 from app.schemas import CandidateCreate
 from app.store import LocalRepository
@@ -75,6 +75,66 @@ def test_api_maps_errors(monkeypatch, tmp_path):
     assert response.status_code == 502
     monkeypatch.setenv("WATER_PROVIDER", "off")
     assert client.get("/api/water-bodies", params={"west": 127, "south": 36, "east": 127.1, "north": 36.1}).status_code == 503
+
+
+SITES = {"elements": [
+    {"type": "way", "id": 11, "tags": {"building": "industrial"}, "geometry": ring(127.0, 36.0, 0.0006)},   # ~0.36 ha roof
+    {"type": "way", "id": 12, "tags": {"building": "greenhouse"}, "geometry": ring(127.002, 36.0, 0.001)},
+    {"type": "way", "id": 13, "tags": {"building": "yes"}, "geometry": ring(127.004, 36.0, 0.0002)},        # ~400 m2
+    {"type": "way", "id": 14, "tags": {"amenity": "parking", "name": "공영주차장"}, "geometry": ring(127.01, 36.0, 0.001)},
+    {"type": "way", "id": 15, "tags": {"amenity": "parking", "parking": "underground"}, "geometry": ring(127.02, 36.0, 0.001)},
+    {"type": "way", "id": 16, "tags": {"landuse": "brownfield"}, "geometry": ring(127.03, 36.0, 0.002)},
+    {"type": "way", "id": 17, "tags": {"landuse": "farmland"}, "geometry": ring(127.04, 36.0, 0.002)},
+]}
+
+
+def test_land_and_building_search_classifies_filters_and_caches_apart_from_water(monkeypatch, tmp_path):
+    queries = []
+    monkeypatch.setattr(waterbodies, "_request", lambda query: queries.append(query) or SITES)
+    roofs = sitefinder.find_sites("building", 127.0, 36.0, 127.05, 36.05)
+    assert roofs["site_type"] == "building"
+    assert [(r["id"], r["kind"]) for r in roofs["results"]] == [("way/11", "공장·산업시설"), ("way/13", "건축물")]
+    assert '"building"' in queries[0] and "if:length()>19" in queries[0]
+    land = sitefinder.find_sites("land", 127.0, 36.0, 127.05, 36.05)
+    assert land["site_type"] == "land"
+    assert [(r["name"], r["kind"]) for r in land["results"]] == [(None, "유휴 부지"), ("공영주차장", "주차장")]
+    assert len(queries) == 2 and "farmland" not in queries[1]
+    for found in (roofs, land):  # usable as a candidate boundary as returned
+        for row in found["results"]:
+            CandidateCreate(name=row["name"] or row["kind"], latitude=row["latitude"], longitude=row["longitude"],
+                            geometry=row["geometry"], site_type=found["site_type"])
+    # Repeat views are served from the per-layer cache; the reservoir seed lookup does not see these files.
+    sitefinder.find_sites("building", 127.001, 36.001, 127.049, 36.049)
+    assert len(queries) == 2
+    assert not list((tmp_path / "water").glob("*.json")) and list((tmp_path / "water" / "building-v2").glob("*.json"))
+
+
+def test_site_search_limits_and_api(monkeypatch, tmp_path):
+    with pytest.raises(ValueError):
+        sitefinder.find_sites("farm", 127.0, 36.0, 127.05, 36.05)
+    with pytest.raises(ValueError):  # a town-sized window only: dense cities hold many roofs
+        sitefinder.find_sites("building", 127.0, 36.0, 127.3, 36.05)
+    monkeypatch.setattr(waterbodies, "_request", lambda query: {"elements": []})
+    client = TestClient(create_app(LocalRepository(str(tmp_path / "db.sqlite3"))))
+    box = {"west": 127, "south": 36, "east": 127.05, "north": 36.05}
+    empty = client.get("/api/site-candidates", params={"kind": "land", **box})
+    assert empty.status_code == 200 and "농지·임야는 검색하지 않습니다" in empty.json()["warning"]
+    assert client.get("/api/site-candidates", params={"kind": "farm", **box}).status_code == 422
+    monkeypatch.setenv("WATER_PROVIDER", "off")
+    assert client.get("/api/site-candidates", params={"kind": "building", **box}).status_code == 503
+
+
+def test_adjacent_small_buildings_are_individually_selectable(monkeypatch):
+    # Both centroids round to the same 0.001-degree cell and both areas to 100 m².
+    shape = ring(127.0001, 36.0001, 0.0001)
+    payload = {"elements": [
+        {"type": "way", "id": 21, "tags": {"building": "yes"}, "geometry": shape},
+        {"type": "way", "id": 22, "tags": {"building": "yes"}, "geometry": ring(127.0003, 36.0001, 0.0001)},
+        {"type": "way", "id": 23, "tags": {"building": "yes"}, "geometry": list(reversed(shape))},
+        {"type": "way", "id": 24, "tags": {"building": "yes"}, "geometry": ring(127.0005, 36.0001, 0.00001)},
+    ]}
+    rows = waterbodies._parse(payload, sitefinder._building_kind, 30)
+    assert {row["id"] for row in rows} == {"way/21", "way/22"}
 
 
 def test_kakao_results_cover_apartments(monkeypatch):

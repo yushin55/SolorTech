@@ -107,7 +107,8 @@ def simulate(equipment, latitude, longitude, frame, durations):
     night = zenith >= 90
     poa = np.maximum(np.asarray(irradiance["poa_global"]), 0)
     poa[night] = 0
-    temperature_parameters = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["sapm"]["open_rack_glass_glass"]
+    temperature_parameters = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["sapm"][
+        equipment.get("temperature_model", "open_rack_glass_glass")]
     cell_temperature = pvlib.temperature.sapm_cell(
         poa, frame.temp_air.to_numpy(), frame.wind_speed.to_numpy(), **temperature_parameters)
     aoi = pvlib.irradiance.aoi(tilt, azimuth, zenith, sun_azimuth)

@@ -1,6 +1,6 @@
 """Standing water bodies (reservoirs, lakes, ponds) from OpenStreetMap via Overpass.
 
-Only the requested map rectangle is sent upstream, and only when the user asks.
+Only the requested map rectangle is sent upstream, including viewport auto-discovery.
 Results are mapped features, not surveyed shorelines; water level changes the
 real surface area through the year.
 """
@@ -44,13 +44,13 @@ _lock = threading.Lock()
 _last_request_at = None
 
 
-def _validate_bbox(west, south, east, north):
+def _validate_bbox(west, south, east, north, max_width=MAX_WIDTH, max_height=MAX_HEIGHT):
     values = (west, south, east, north)
     if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in values):
         raise ValueError("지도 범위가 올바르지 않습니다.")
     if not (-180 <= west < east <= 180 and -90 <= south < north <= 90):
         raise ValueError("지도 범위는 서<동, 남<북 순서여야 합니다.")
-    if east - west > MAX_WIDTH + 1e-9 or north - south > MAX_HEIGHT + 1e-9:
+    if east - west > max_width + 1e-9 or north - south > max_height + 1e-9:
         raise ValueError("검색 범위가 너무 넓습니다. 지도를 더 확대한 뒤 다시 찾으세요.")
 
 
@@ -139,14 +139,22 @@ def _fit(polygon):
     return None
 
 
-def _parse(payload):
+def _water_kind(tags):
+    water = tags.get("water", "")
+    if water in EXCLUDED_WATER or tags.get("natural") == "coastline":
+        return None
+    return "저수지" if tags.get("landuse") == "reservoir" else KIND_LABELS.get(water, "수면")
+
+
+def _parse(payload, classify=_water_kind, min_area=MIN_AREA_M2):
+    """Polygons of at least min_area whose tags classify() labels; None skips a feature."""
     if not isinstance(payload, dict) or not isinstance(payload.get("elements"), list):
         raise ValueError("Invalid Overpass response")
     results = []
     for element in payload["elements"]:
         tags = element.get("tags") or {}
-        water = tags.get("water", "")
-        if water in EXCLUDED_WATER or tags.get("natural") == "coastline":
+        kind = classify(tags)
+        if kind is None:
             continue
         try:
             geometry = _geometry(element)
@@ -157,13 +165,12 @@ def _parse(payload):
         if not geometry.is_valid:
             geometry = geometry.buffer(0)
         parts = list(geometry.geoms) if isinstance(geometry, MultiPolygon) else [geometry]
-        kind = "저수지" if tags.get("landuse") == "reservoir" else KIND_LABELS.get(water, "수면")
         name = (tags.get("name:ko") or tags.get("name") or "").strip()[:100] or None
         for index, part in enumerate(sorted(parts, key=lambda g: g.area, reverse=True)):
             if part.geom_type != "Polygon":
                 continue
             area = _area_m2(part)
-            if area < MIN_AREA_M2:
+            if area < min_area:
                 continue
             minx, miny, maxx, maxy = part.bounds
             if maxx - minx > 1 or maxy - miny > 1:
@@ -182,10 +189,13 @@ def _parse(payload):
                 "longitude": round(point.x, 6),
                 "geometry": mapping(shape),
             })
-    # The same water body can be tagged as both a way and a relation member.
+    # The same feature can be tagged as both a way and a relation member.
     seen, unique = set(), []
     for row in sorted(results, key=lambda r: r["area_m2"], reverse=True):
-        key = (row["name"], round(row["area_m2"], -2), round(row["latitude"], 3), round(row["longitude"], 3))
+        # Coarse centre/area rounding collapsed adjacent small houses into one.
+        # Compare their outlines, independent of start vertex and winding order.
+        key = tuple(sorted(tuple(sorted((round(x, 7), round(y, 7)) for x, y in ring[:-1]))
+                           for ring in row["geometry"]["coordinates"]))
         if key not in seen:
             seen.add(key)
             unique.append(row)
@@ -200,15 +210,20 @@ def _cache_dir():
     return Path(os.getenv("WATER_CACHE_DIR", default))
 
 
-def _snap(west, south, east, north):
-    """Widen to a 0.1 degree grid so nearby views share one cached upstream answer."""
-    step = 10
-    return (math.floor(west * step) / step, math.floor(south * step) / step,
-            math.ceil(east * step) / step, math.ceil(north * step) / step)
+def _snap(west, south, east, north, step=10):
+    """Widen to a 1/step degree grid so nearby views share one cached upstream answer."""
+    return (math.floor(round(west * step, 6)) / step, math.floor(round(south * step, 6)) / step,
+            math.ceil(round(east * step, 6)) / step, math.ceil(round(north * step, 6)) / step)
 
 
-def _read_disk(key):
-    path = _cache_dir() / ("_".join(f"{v:.1f}" for v in key) + ".json")
+def _cache_path(key, prefix):
+    # Water keeps its original file names; other layers live in a subfolder.
+    directory = _cache_dir() / prefix if prefix else _cache_dir()
+    return directory / ("_".join(f"{v:.2f}" if prefix else f"{v:.1f}" for v in key) + ".json")
+
+
+def _read_disk(key, prefix=""):
+    path = _cache_path(key, prefix)
     try:
         if time.time() - path.stat().st_mtime < DISK_TTL:
             return json.loads(path.read_text(encoding="utf-8"))
@@ -217,11 +232,10 @@ def _read_disk(key):
     return None
 
 
-def _write_disk(key, rows):
-    directory = _cache_dir()
+def _write_disk(key, rows, prefix=""):
     try:
-        directory.mkdir(parents=True, exist_ok=True)
-        path = directory / ("_".join(f"{v:.1f}" for v in key) + ".json")
+        path = _cache_path(key, prefix)
+        path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(".tmp")
         temporary.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
         temporary.replace(path)
@@ -229,13 +243,14 @@ def _write_disk(key, rows):
         pass  # A read-only data folder only costs a repeat download.
 
 
-def _rows_for(key):
+def _rows_for(key, prefix="", query=_query, parse=_parse, subject="수면"):
     global _last_request_at
-    cached = _cache.get(key)
+    cache_key = (prefix, *key)
+    cached = _cache.get(cache_key)
     if cached and cached[0] > time.monotonic():
-        _cache.move_to_end(key)
+        _cache.move_to_end(cache_key)
         return cached[1]
-    rows = _read_disk(key)
+    rows = _read_disk(key, prefix)
     if rows is None:
         if _last_request_at is not None:
             delay = 1.0 - (time.monotonic() - _last_request_at)
@@ -243,11 +258,11 @@ def _rows_for(key):
                 time.sleep(delay)
         _last_request_at = time.monotonic()
         try:
-            rows = _parse(_request(_query(*key)))
+            rows = parse(_request(query(*key)))
         except (httpx.HTTPError, ValueError, TypeError) as error:
-            raise ConnectionError("수면 자료 서버(OpenStreetMap)가 응답하지 않습니다. 공용 서버가 혼잡할 수 있으니 잠시 후 다시 시도하세요.") from error
-        _write_disk(key, rows)
-    _cache[key] = (time.monotonic() + CACHE_TTL, rows)
+            raise ConnectionError(f"{subject} 자료 서버(OpenStreetMap)가 응답하지 않습니다. 공용 서버가 혼잡할 수 있으니 잠시 후 다시 시도하세요.") from error
+        _write_disk(key, rows, prefix)
+    _cache[cache_key] = (time.monotonic() + CACHE_TTL, rows)
     while len(_cache) > 128:
         _cache.popitem(last=False)
     return rows

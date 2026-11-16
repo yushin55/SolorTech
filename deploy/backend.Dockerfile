@@ -20,6 +20,8 @@ RUN --mount=type=secret,id=data_token,required=true \
     python scripts/fetch_data.py "$DATA_REPO" /run/secrets/data_token /raw \
  && mkdir -p /app/data \
  && python scripts/import_data.py /raw \
+ && (python scripts/import_optional.py /raw \
+     || echo "WARNING: 설비정보·발전실적 가져오기 실패 - 해당 화면은 비어 있습니다") \
  && (python scripts/build_calibration.py \
      || echo "WARNING: 보정 모델 생성 실패 - 물리 모델만으로 실행됩니다") \
  && rm -rf /raw

@@ -63,6 +63,16 @@ class CandidateCreate(StrictModel):
     water_depth_m: float | None = Field(default=None, ge=0, le=1000)
     water_level_m: float | None = Field(default=None, ge=-500, le=10000)
     site_type: SiteType = "floating"
+    # 지상·건축물 현장 조건 (수상에는 쓰지 않음). None = 현장 조사값 미입력
+    boundary_setback_m: float = Field(default=0, ge=0, le=100)
+    terrain_slope_deg: float | None = Field(default=None, ge=0, lt=90)
+    slope_limit_deg: float = Field(default=15, ge=0, lt=90)
+    roof_mount: Literal["rack", "flush"] = "rack"
+    roof_tilt_deg: float = Field(default=10, ge=0, le=90)
+    roof_azimuth_deg: float = Field(default=180, ge=90, le=270)
+    roof_allowable_load_kg_m2: float | None = Field(default=None, ge=0, le=10000)
+    roof_system_load_kg_m2: float | None = Field(default=None, ge=0, le=10000)
+    solartech_asset_id: str | None = Field(default=None, max_length=100)
     reference_plant_id: str | None = Field(default=None, max_length=100)
     source: str = Field(default="", max_length=300)
 
@@ -141,6 +151,11 @@ class Finance(StrictModel):
     self_use_kwh: NonNegative = 0
     retail_price: NonNegative = 0
     stress_pcts: list[float] = Field(default_factory=lambda: [5, 10], max_length=6)
+    # 자금 조달 (선택): 0% = 전액 자기자본. B/C·NPV·IRR은 가이드라인대로 비차입 기준을 유지한다.
+    loan_pct: float = Field(default=0, ge=0, le=100)
+    loan_rate_pct: float = Field(default=4.5, ge=0, le=50)
+    loan_years: int = Field(default=10, ge=1, le=50)
+    grace_years: int = Field(default=0, ge=0, le=20)
     price_scenarios: list[float] = Field(default_factory=list, max_length=6)
 
     @field_validator("stress_pcts")
@@ -159,6 +174,21 @@ class DesignCreate(StrictModel):
     finance: Finance = Field(default_factory=Finance)
 
 
-def defaults():
-    return {"equipment": Equipment().model_dump(), "costs": Costs().model_dump(),
-            "finance": Finance().model_dump()}
+def defaults(site_type=None):
+    values = {"equipment": Equipment().model_dump(), "costs": Costs().model_dump(),
+              "finance": Finance().model_dump()}
+    if site_type is None:
+        return values
+    # Same starting values as the frontend's designDefaults (site type → module preset).
+    from .engine.guideline import MODULES
+    preset = {"floating": "floating_450", "building": "hdhes_t440nf"}.get(site_type, "land_480")
+    module = MODULES[preset]
+    values["equipment"].update(
+        module_preset=preset, module_manufacturer=module["manufacturer"], module_model=module["label"],
+        module_source=module["source"], capacity_mode="capacity",
+        **{key: module[key] for key in ("module_power_w", "module_width_m", "module_height_m", "module_price",
+                                        "vmp_v", "voc_v", "voltage_temp_coeff_pct", "gamma_pdc")
+           if key in module})
+    if site_type != "floating":
+        values["costs"].update(float_per_kw=0, mooring_per_kw=0)
+    return values

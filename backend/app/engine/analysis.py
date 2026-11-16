@@ -9,7 +9,7 @@ validated on K-water operating records.
 import math
 
 from .. import calibration, kma, stations, weather
-from . import guideline
+from . import guideline, siting
 from .common import ENGINE_VERSION, integer, number
 from .energy import long_term_energy, orientation_poa
 from .finance import calculate_finance
@@ -129,6 +129,18 @@ def _costs(equipment, costs, dc_kw, inverter, distance, floating):
     return rows, sum(row["amount"] for row in rows)
 
 
+def design_strings(plan, equipment):
+    """표 3-13 strings for the plan: a target capacity rounds up to whole series units, an area rounds down."""
+    strings = guideline.string_design(plan["requested_modules"], equipment)
+    if plan["mode"] == "capacity" and strings["modules_used"] < plan["requested_modules"]:
+        series = strings["series"]
+        rounded = math.ceil(plan["requested_modules"] / series) * series
+        strings = guideline.string_design(rounded, equipment)
+        strings["warnings"] = [w for w in strings["warnings"] if not w.startswith("직렬")]
+        strings["warnings"].append(f"목표 용량을 채우도록 직렬 {series}장 단위로 올려 모듈 {rounded:,}장으로 계산했습니다.")
+    return strings
+
+
 def run_analysis(snapshot):
     """Calculate solely from the immutable snapshot supplied by the API."""
     candidate = snapshot["candidate"]
@@ -138,16 +150,27 @@ def run_analysis(snapshot):
     floating = candidate.get("site_type", "floating") == "floating"
     warnings = []
 
+    asset_source = candidate.get("solartech_source")
+    if asset_source:
+        asset = asset_source["asset"]
+        warnings.append(f"SolarTech 제원 출처: {asset_source['file']} · {asset['source_sheet']} {asset['source_row']}행. "
+                        "원본에 모듈 치수·전기특성·가격과 인버터 효율이 없어 해당 입력값은 별도 확인이 필요합니다. "
+                        "인버터 원본 제원은 참조용이며 계산에는 선택한 인버터 모델을 사용합니다.")
+        if asset.get("capacity_mismatch"):
+            warnings.append(f"원본 전체 용량 {asset['capacity_kw']:g} kW와 모듈 합산 용량 "
+                            f"{asset['calculated_module_capacity_kw']:g} kW가 다릅니다. 확인 입력한 목표 용량으로 계산합니다.")
+
     # ① 설치대상지 선정
     factors = guideline.site_factors(latitude, longitude)
-    equipment, pitch = guideline.resolve_equipment(design["equipment"], factors)
+    equipment, pitch, site_warnings = siting.resolve(candidate, design["equipment"], factors)
+    warnings += site_warnings
     equipment["albedo"] = .06 if floating else .2
 
     # ② 부지면적·기자재 → 설치 용량
     probe, maximum = _layout(candidate, equipment, pitch)
     plan = capacity_plan(equipment, pitch, maximum)
     requested = plan["requested_modules"]
-    strings = guideline.string_design(requested, equipment)
+    strings = design_strings(plan, equipment)
     equipment["module_count"] = strings["modules_used"]
     dc_kw = equipment["module_count"] * equipment["module_power_w"] / 1000
     inverter = guideline.inverter_design(dc_kw, equipment.get("inverter_configuration", "auto"))
@@ -167,7 +190,8 @@ def run_analysis(snapshot):
     reference = long_term_energy(calibration.standard_equipment(equipment["tilt"], equipment["azimuth"], floating)
                                  | ({"seasonal_tilts": equipment["seasonal_tilts"]} if equipment.get("seasonal_tilts") else {}),
                                  latitude, longitude, frame)
-    calibrated = calibration.apply(reference, {"latitude": latitude, "longitude": longitude, "capacity_kw": dc_kw,
+    # Equipment-sheet imports are reviewed with physics only (never fed to the calibration model).
+    calibrated = None if asset_source else calibration.apply(reference, {"latitude": latitude, "longitude": longitude, "capacity_kw": dc_kw,
                                                "type": "floating" if floating else candidate.get("site_type", "plant")},
                                    exclude_plant=candidate.get("reference_plant_id"))
     shading = number(equipment, "shading_loss_pct", default=0, minimum=0, maximum=99.9)
@@ -420,6 +444,11 @@ def _assumption_table(equipment, costs, finance, plan, floating, distance, inver
         rows += [("재무", "SMP", finance.get("smp_price", 0), "원/kWh", user),
                  ("재무", "REC 가격", finance.get("rec_price", 0), "원/REC", user),
                  ("재무", "REC 가중치", finance.get("rec_weight", 1), "", user)]
+    if finance.get("loan_pct", 0):
+        rows += [("자금 조달", "융자 비율 (총 공사비 대비)", finance["loan_pct"], "%", "사용자 가정 · 자기자본 IRR·DSCR에만 사용"),
+                 ("자금 조달", "융자 금리", finance.get("loan_rate_pct", 4.5), "%/년", user),
+                 ("자금 조달", "상환 기간", finance.get("loan_years", 10), "년", "원리금균등 상환 가정"),
+                 ("자금 조달", "거치 기간", finance.get("grace_years", 0), "년", "거치 중 이자만 상환 가정")]
     return [{"group": g, "label": label, "value": value, "unit": unit, "source": source}
             for g, label, value, unit, source in rows]
 
@@ -439,7 +468,11 @@ def period_model_rows(run, years):
     equipment = {**snapshot["design"]["equipment"], "tilt": steps["site"]["tilt"],
                  "module_count": steps["equipment"]["module_count"], "ac_capacity_kw": result["capacity_ac_kw"],
                  **{key: steps["equipment"]["module"][key] for key in ("module_power_w", "module_width_m", "module_height_m")},
+                 "azimuth": steps["site"].get("azimuth", snapshot["design"]["equipment"].get("azimuth", 180)),
                  "albedo": .06 if candidate.get("site_type", "floating") == "floating" else .2}
+    if candidate.get("site_type") in ("land", "building"):
+        flush = candidate.get("site_type") == "building" and candidate.get("roof_mount") == "flush"
+        equipment["temperature_model"] = "close_mount_glass_glass" if flush else "open_rack_glass_glass"
     if steps["site"].get("structure_type") == "seasonal":
         equipment["seasonal_tilts"] = steps["site"]["seasonal_tilts"]
     frame = weather.scale_irradiance(weather.hourly(candidate["latitude"], candidate["longitude"], years),

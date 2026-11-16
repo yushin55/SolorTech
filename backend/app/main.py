@@ -18,10 +18,11 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
-from . import calibration, kma, kwater, stations, weather
-from .engine import guideline
+from . import calibration, generation, kma, kwater, solartech, stations, weather
+from .engine import siting, guideline
 from .geocoding import search_places
 from .seed import seed_candidates
+from .sitefinder import find_sites
 from .waterbodies import find_water_bodies
 from .schemas import CandidateCreate, DesignCreate, Equipment, ProjectCreate, ProjectPatch, defaults
 from .store import create_repository
@@ -267,7 +268,7 @@ def create_app(repository=None, seed=None):
     @app.post("/api/capacity-preview")
     def capacity_preview(payload: dict = Body(...)):
         """Live module count / capacity for the design form, same rules as the analysis."""
-        from .engine.analysis import capacity_plan
+        from .engine.analysis import capacity_plan, design_strings
 
         try:
             latitude = float(payload.get("latitude"))
@@ -281,12 +282,16 @@ def create_app(repository=None, seed=None):
         if not (33 <= latitude <= 39 and 124 <= longitude <= 132):
             raise HTTPException(422, "국내 좌표만 계산할 수 있습니다.")
         factors = guideline.site_factors(latitude, longitude)
-        resolved, pitch = guideline.resolve_equipment(equipment, factors)
+        site = payload.get("site") if isinstance(payload.get("site"), dict) else {}
         try:
+            resolved, pitch, _ = siting.resolve({"latitude": latitude, "longitude": longitude, **site}, equipment, factors)
             plan = capacity_plan(resolved, pitch)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
-        strings = guideline.string_design(plan["requested_modules"], resolved)
+        try:
+            strings = design_strings(plan, resolved)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
         used = strings["modules_used"]
         return {**plan, "modules_used": used, "dc_kw": used * resolved["module_power_w"] / 1000,
                 "tilt": resolved["tilt"], "azimuth": resolved["azimuth"], "string_warnings": strings["warnings"],
@@ -382,10 +387,93 @@ def create_app(repository=None, seed=None):
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
 
+    @app.get("/api/solartech/assets")
+    def solartech_assets():
+        return solartech.load_registry()
+
+    @app.get("/api/solartech/generation/{series_id}")
+    def generation_records(series_id: str, year: int = Query(..., ge=1900, le=2200)):
+        data = generation.catalog(solartech.DATA_PATH.parent)
+        series = next((s for s in (data or {}).get("series", []) if s["id"] == series_id), None)
+        if series is None:
+            raise HTTPException(404, "발전실적을 찾을 수 없습니다.")
+        return {"series": series, "year": year, "records": generation.observations(series_id, year, solartech.DATA_PATH.parent)}
+
+    @app.post("/api/solartech/generation/{series_id}/compare")
+    def compare_generation(series_id: str, request: Request, payload: dict = Body(...)):
+        if payload.get("assume_kwh") is not True:
+            raise HTTPException(422, "원본 단위의 kWh 해석 가정을 확인해야 대조할 수 있습니다.")
+        year = payload.get("year")
+        if isinstance(year, bool) or not isinstance(year, int) or not 1900 <= year <= 2200:
+            raise HTTPException(422, "대조 연도를 확인하세요.")
+        run_id = payload.get("run_id")
+        if not isinstance(run_id, str):
+            raise HTTPException(422, "완료된 분석을 선택하세요.")
+        run = find(request.app.state.repo, "runs", run_id)
+        if run["status"] != "completed":
+            raise HTTPException(409, "완료된 분석을 선택하세요.")
+        data = generation.catalog(solartech.DATA_PATH.parent)
+        series = next((s for s in (data or {}).get("series", []) if s["id"] == series_id), None)
+        if series is None:
+            raise HTTPException(404, "발전실적을 찾을 수 없습니다.")
+        try:
+            return generation.compare(series, run, year, generation.observations(series_id, year, solartech.DATA_PATH.parent))
+        except ConnectionError as error:
+            raise HTTPException(502, str(error)) from error
+        except (ValueError, KeyError) as error:
+            raise HTTPException(422, str(error)) from error
+
+    @app.post("/api/projects/{identifier}/solartech-assets/{asset_id}", status_code=201)
+    def import_solartech_asset(identifier: str, asset_id: str, payload: solartech.AssetImport, request: Request):
+        repo = request.app.state.repo
+        find(repo, "projects", identifier)
+        registry = solartech.load_registry()
+        asset = next((a for a in registry["assets"] if a["id"] == asset_id), None)
+        if asset is None:
+            raise HTTPException(404, "엑셀 발전소 정보를 찾을 수 없습니다.")
+        # A repeated click must not create another candidate or overwrite edits.
+        with repo.lock:
+            existing = next((c for c in repo.list("candidates") if c["project_id"] == identifier and c.get("solartech_asset_id") == asset_id), None)
+            if existing:
+                existing_design = next((d for d in repo.list("designs") if d["candidate_id"] == existing["id"]), None)
+                return {"candidate": existing, "design": existing_design, "already_imported": True}
+            candidate_input, design_input = solartech.review_inputs(asset, payload, registry["source_file"])
+            try:
+                from .engine.analysis import capacity_plan
+                factors = guideline.site_factors(candidate_input["latitude"], candidate_input["longitude"])
+                resolved, pitch, _ = siting.resolve(candidate_input, design_input["equipment"], factors)
+                capacity_plan(resolved, pitch)
+            except ValueError as error:
+                raise HTTPException(422, str(error)) from error
+            candidate = record(candidate_input, project_id=identifier, demo=False, solartech_asset_id=asset_id,
+                               solartech_source={"file": registry["source_file"], "sha256": registry["sha256"], "asset": asset,
+                                                 "confirmed_inputs": payload.model_dump()})
+            design_input["candidate_id"] = candidate["id"]
+            design = record(design_input, project_id=identifier)
+            repo.put("candidates", candidate)
+            try:
+                repo.put("designs", design)
+            except Exception:
+                repo.delete("candidates", candidate["id"])
+                raise
+            touch(repo, identifier)
+        return {"candidate": candidate, "design": design, "already_imported": False}
+
     @app.get("/api/water-bodies")
     def water_bodies(west: float, south: float, east: float, north: float):
         try:
             return find_water_bodies(west, south, east, north)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        except PermissionError as error:
+            raise HTTPException(503, str(error)) from error
+        except ConnectionError as error:
+            raise HTTPException(502, str(error)) from error
+
+    @app.get("/api/site-candidates")
+    def site_candidates(kind: str, west: float, south: float, east: float, north: float):
+        try:
+            return find_sites(kind, west, south, east, north)
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
         except PermissionError as error:
