@@ -270,3 +270,28 @@ def long_term_energy(equipment, latitude, longitude, weather):
             "warnings": warnings,
         },
     }
+
+
+def orientation_poa(latitude, longitude, weather, combos, albedo=.2):
+    """Mean annual plane-of-array irradiation (kWh/m²·년) for each (tilt, azimuth).
+
+    Same weather, solar position and isotropic transposition as ``simulate``;
+    used to compare orientations relative to the analysed one. Temperature and
+    incidence-angle effects are not re-simulated per combination.
+    """
+    frame, durations, *_ = _weather_intervals(weather)
+    midpoint = frame.index + pd.to_timedelta(durations / 2, unit="h")
+    solar = pvlib.solarposition.get_solarposition(midpoint, latitude, longitude, altitude=50)
+    zenith = solar.apparent_zenith.to_numpy()
+    sun_azimuth = solar.azimuth.to_numpy()
+    night = zenith >= 90
+    dni, ghi, dhi = frame.dni.to_numpy(), frame.ghi.to_numpy(), frame.dhi.to_numpy()
+    years = max(1, len(set(frame.index.year)))
+    rows = []
+    for tilt, azimuth in combos:
+        poa = np.asarray(pvlib.irradiance.get_total_irradiance(
+            tilt, azimuth, zenith, sun_azimuth, dni, ghi, dhi, albedo=albedo, model="isotropic")["poa_global"])
+        poa = np.where(night, 0, np.maximum(np.nan_to_num(poa), 0))
+        rows.append({"tilt": float(tilt), "azimuth": float(azimuth),
+                     "poa_kwh_m2": float((poa * durations).sum() / 1000 / years)})
+    return rows

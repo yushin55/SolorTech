@@ -18,12 +18,12 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
-from . import calibration, kma, kwater, weather
+from . import calibration, kma, kwater, stations, weather
 from .engine import guideline
 from .geocoding import search_places
 from .seed import seed_candidates
 from .waterbodies import find_water_bodies
-from .schemas import CandidateCreate, DesignCreate, ProjectCreate, ProjectPatch, defaults
+from .schemas import CandidateCreate, DesignCreate, Equipment, ProjectCreate, ProjectPatch, defaults
 from .store import create_repository
 from .validation import MAX_BYTES, parse_timestamp, read_csv, validate_measurements
 
@@ -251,7 +251,47 @@ def create_app(repository=None, seed=None):
 
     @app.get("/api/guideline/site")
     def guideline_site(latitude: float = Query(..., ge=33, le=39), longitude: float = Query(..., ge=124, le=132)):
-        return guideline.site_factors(latitude, longitude)
+        nearby = stations.nearest(latitude, longitude, 3)
+        checks = {stn: {"station": kma.station(stn), "factors": {}} for stn in kma.irradiance_stations()}
+        near_si = kma.nearest_correction(latitude, longitude, checks)
+        if near_si:
+            near_si.pop("factors", None)
+        return {**guideline.site_factors(latitude, longitude), "weather_station": nearby[0],
+                "nearby_stations": nearby, "station_source": stations.SOURCE,
+                "irradiance_station": near_si}
+
+    @app.get("/api/weather-stations")
+    def weather_stations():
+        return {"stations": stations.STATIONS, "source": stations.SOURCE}
+
+    @app.post("/api/capacity-preview")
+    def capacity_preview(payload: dict = Body(...)):
+        """Live module count / capacity for the design form, same rules as the analysis."""
+        from .engine.analysis import capacity_plan
+
+        try:
+            latitude = float(payload.get("latitude"))
+            longitude = float(payload.get("longitude"))
+            equipment = Equipment.model_validate(payload.get("equipment") or {}).model_dump()
+        except ValidationError as exc:
+            fields = ", ".join(str(err["loc"][-1]) for err in exc.errors()[:3])
+            raise HTTPException(422, f"입력값을 확인하세요 (빈 칸이거나 범위를 벗어난 값: {fields})") from exc
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(422, "후보지 좌표가 필요합니다.") from exc
+        if not (33 <= latitude <= 39 and 124 <= longitude <= 132):
+            raise HTTPException(422, "국내 좌표만 계산할 수 있습니다.")
+        factors = guideline.site_factors(latitude, longitude)
+        resolved, pitch = guideline.resolve_equipment(equipment, factors)
+        try:
+            plan = capacity_plan(resolved, pitch)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        strings = guideline.string_design(plan["requested_modules"], resolved)
+        used = strings["modules_used"]
+        return {**plan, "modules_used": used, "dc_kw": used * resolved["module_power_w"] / 1000,
+                "tilt": resolved["tilt"], "azimuth": resolved["azimuth"], "string_warnings": strings["warnings"],
+                "module": {key: resolved.get(key) for key in ("module_model", "module_manufacturer", "module_power_w",
+                                                              "module_width_m", "module_height_m", "module_source")}}
 
     @app.get("/api/plants")
     def plants():
@@ -317,6 +357,10 @@ def create_app(repository=None, seed=None):
         correction = result.get("weather_correction") or {}
         normals = kma.load_normals()
         return {"irradiance": correction.get("check"), "applied": bool(correction.get("applied")),
+                "mode": correction.get("mode"), "selected": correction.get("selected"),
+                "stations": [{"stn": int(stn), **{k: v for k, v in info.items() if k != "factors"},
+                              "factors": info.get("factors")}
+                             for stn, info in (correction.get("station_factors") or {}).items()],
                 "variants": correction.get("variants"), "rule": correction.get("rule"),
                 "normals": None if normals is None else {
                     "station": kma.station(int(normals.stn.iloc[0])), "period": str(normals.period.iloc[0]),

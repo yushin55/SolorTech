@@ -32,7 +32,8 @@ const SITE_TYPE: Record<string, string> = {
   floating: "수상 (댐·저수지)",
   plant: "정수장 부지",
   basin: "침전지 상부",
-  land: "육상",
+  land: "지상 (평지·경사지)",
+  building: "건축물 (옥상·지붕)",
 };
 const SEASON: Record<string, string> = {
   spring: "봄",
@@ -221,7 +222,16 @@ export function MonthlyEnergyChart({ result }: { result: Result }) {
   );
 }
 
-export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: boolean }) {
+export function ReviewSteps({
+  run,
+  expandAll = false,
+  only,
+}: {
+  run: Run;
+  expandAll?: boolean;
+  /** Render just these guideline steps, expanded, in order (wizard pages). */
+  only?: string[];
+}) {
   const result = run.result!;
   const { site, equipment, costs, revenue, substitution } = result.steps;
   const e = result.economics;
@@ -290,13 +300,17 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
         <Facts
           rows={[
             [
-              "수면 면적",
-              equipment.area_m2 == null
-                ? "경계 없음"
-                : `${num(equipment.area_m2 / 10000, 2)} ha`,
-              equipment.max_modules_by_area == null
-                ? "기존 발전소 재현 검토"
-                : `이격거리 기준 최대 ${num(equipment.max_modules_by_area)}장`,
+              "부지 면적",
+              equipment.area_m2 != null
+                ? `${num(equipment.area_m2 / 10000, 2)} ha (지도 경계)`
+                : equipment.plan?.site_area_m2 != null
+                  ? `${num(equipment.plan.site_area_m2, 0)} m² (입력값)`
+                  : "입력 없음",
+              equipment.max_modules_by_area != null
+                ? `이격거리 기준 최대 ${num(equipment.max_modules_by_area)}장`
+                : equipment.plan
+                  ? `용량 입력 방식: ${equipment.plan.mode_label}`
+                  : "기존 발전소 재현 검토",
             ],
             [
               "모듈",
@@ -387,7 +401,7 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
       </Step>
       <Step
         id="costs"
-        title="④ 개략공사비"
+        title="④ 개략공사비 · 현금 유출"
         source="부록 2.5"
         summary={
           <>
@@ -400,6 +414,7 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
           <table>
             <thead>
               <tr>
+                <th>구분</th>
                 <th>항목</th>
                 <th>산출</th>
                 <th>근거</th>
@@ -409,6 +424,7 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
             <tbody>
               {costs.items.map((item) => (
                 <tr key={item.key}>
+                  <td>{item.category ?? "-"}</td>
                   <th>{item.label}</th>
                   <td>{item.basis}</td>
                   <td>
@@ -420,6 +436,7 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
                 </tr>
               ))}
               <tr className="total">
+                <td />
                 <th>총 공사비</th>
                 <td>kW당 {num(costs.per_kw / 10000, 1)}만 원</td>
                 <td />
@@ -602,6 +619,15 @@ export function ReviewSteps({ run, expandAll = false }: { run: Run; expandAll?: 
     ).props.children,
   ) as ReactElement<StepProps>[];
   const reference = result.reference ? <ReferenceBacktest reference={result.reference} /> : null;
+  if (only)
+    return (
+      <ExpandAll.Provider value>
+        <div className="stack">
+          {only.flatMap((id) => steps.filter((s) => s.props.id === id))}
+          {only.includes("energy") && reference}
+        </div>
+      </ExpandAll.Provider>
+    );
   if (expandAll)
     return (
       <ExpandAll.Provider value>

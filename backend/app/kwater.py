@@ -7,7 +7,8 @@ Two real sources are supported and kept distinct:
 * ``settlement`` — 발전원별 정산내역 workbook (daily 전력거래량, kWh) for 26 plants.
   Traded/settled energy is not the same quantity as metered generation.
 
-Coordinates are geocoded facility or administrative-area points (OSM Nominatim),
+Coordinates of the 26 settlement plants are the team's map-verified site addresses
+(발전소_기상관측소_매칭, 2026-11); Asan remains a geocoded point (OSM Nominatim),
 not surveyed array centroids; they are only used to pick reanalysis weather cells.
 Tilt/azimuth are not in the source files, so each plant uses the same guideline
 lookup as a new candidate (표 3-19 nearby K-water site, else 표 3-18) facing south,
@@ -42,32 +43,32 @@ TYPE_LABELS = {
 
 # id, source column name, type, lat, lon, coordinate basis
 _SETTLEMENT_PLANTS = [
-    ("daebul", "대불태양광", "unknown", 34.7458, 126.4694, "영암군 삼호읍 행정중심"),
-    ("gosan-plant", "고산정수장태양광", "plant", 35.9728, 127.2281, "완주군 고산면 행정중심"),
-    ("hapcheon-floating-2", "합천수상태양광#2", "floating", 35.5337, 128.0319, "합천댐 시설점"),
-    ("hwangji", "황지태양광", "unknown", 37.1650, 128.9854, "태백시 황지동 행정중심"),
-    ("cheongju-plant", "청주(정)태양광", "plant", 36.6421, 127.4892, "청주시 행정중심"),
-    ("boryeong-plant", "보령정수장태양광", "plant", 36.3340, 126.6132, "보령시 행정중심"),
-    ("cheonan-plant", "천안(정)태양광", "plant", 36.8150, 127.1141, "천안시 행정중심"),
-    ("gumi-plant", "구미(정)태양광", "plant", 36.1196, 128.3445, "구미시 행정중심"),
-    ("siheung-plant", "시흥(정)태양광", "plant", 37.3799, 126.8032, "시흥시 행정중심"),
-    ("goyang-plant", "고양(정)태양광", "plant", 37.6369, 126.8322, "고양시 덕양구 행정중심"),
-    ("deokso-plant", "덕소(정)태양광", "plant", 37.5947, 127.2375, "남양주시 와부읍 행정중심"),
-    ("miryang-plant", "밀양정수장태양광", "plant", 35.5076, 128.7558, "밀양정수장 시설점"),
-    ("yangsan-plant", "양산정수장태양광", "plant", 35.3350, 129.0371, "양산시 행정중심"),
-    ("gosan-basin", "고산(침)태양광", "basin", 35.9728, 127.2281, "완주군 고산면 행정중심"),
-    ("haepyeong-basin", "해평(침)태양광", "basin", 36.2148, 128.3884, "구미시 해평면 행정중심"),
-    ("deokso-plant-2", "덕소(정) 제2태양광", "plant", 37.5947, 127.2375, "남양주시 와부읍 행정중심"),
-    ("gumi-plant-2", "구미(정) 제2태양광", "plant", 36.1196, 128.3445, "구미시 행정중심"),
-    ("goseong", "고성(조) 태양광", "unknown", 34.9776, 128.3202, "경남 고성군 고성읍 행정중심(명칭상 지역 추정)"),
-    ("boryeong-floating", "보령수상태양광", "floating", 36.2543, 126.6717, "보령호 수면점"),
-    ("sihwa-bangameori", "시화방아머리태양광", "unknown", 37.2844, 126.5716, "안산시 방아머리 지명점"),
-    ("siheung-plant-2", "시흥(정)태양광#2", "plant", 37.3799, 126.8032, "시흥시 행정중심"),
-    ("chungju-floating", "충주수상태양광", "floating", 37.0447, 127.8668, "충주 조정지댐 시설점"),
-    ("gumi-plant-3", "구미(정)제3태양광", "plant", 36.1196, 128.3445, "구미시 행정중심"),
-    ("daecheong-intake", "대청취수장 육상 태양광발전소", "land", 36.4595, 127.4715, "대전 대덕구 미호동(대청댐 하류) 지명점"),
-    ("seokseong-plant", "석성(정)탄소중립태양광", "plant", 36.2362, 126.9977, "부여군 석성면 행정중심"),
-    ("chungjudam-floating-3", "충주댐수상태양광#3", "floating", 37.0063, 127.9926, "충주댐 시설점"),
+    ("daebul", "대불태양광", "unknown", 34.908690, 126.505088, "현장 주소 지도 확인(전남 무안 몽탄면 몽탄로 1140)"),
+    ("gosan-plant", "고산정수장태양광", "plant", 35.977791, 127.227034, "현장 주소 지도 확인(전북 완주군 고산면 성재리 27(여과지))"),
+    ("hapcheon-floating-2", "합천수상태양광#2", "floating", 35.560355, 128.030955, "현장 주소 지도 확인(경남 합천군 용주면 죽죽리 8)"),
+    ("hwangji", "황지태양광", "unknown", 37.209902, 128.988122, "현장 주소 지도 확인(강원 태백시 구와우길 66)"),
+    ("cheongju-plant", "청주(정)태양광", "plant", 36.605796, 127.454175, "현장 주소 지도 확인(충북 청주시 서원구 성화동 286)"),
+    ("boryeong-plant", "보령정수장태양광", "plant", 36.259383, 126.629980, "현장 주소 지도 확인(충남 보령시 웅천읍 평리 수자원공사길 98)"),
+    ("cheonan-plant", "천안(정)태양광", "plant", 36.745624, 127.148275, "현장 주소 지도 확인(충남 천안시 동남구 풍세면 미죽리 121-8)"),
+    ("gumi-plant", "구미(정)태양광", "plant", 36.170681, 128.376262, "현장 주소 지도 확인(경북 구미시 고아읍 괴평리 34-3)"),
+    ("siheung-plant", "시흥(정)태양광", "plant", 37.351791, 126.792585, "현장 주소 지도 확인(경기도 안산시 단원구 선부동 1169)"),
+    ("goyang-plant", "고양(정)태양광", "plant", 37.647502, 126.814731, "현장 주소 지도 확인(경기도 고양시 일산동구 산황동 300)"),
+    ("deokso-plant", "덕소(정)태양광", "plant", 37.587332, 127.242044, "현장 주소 지도 확인(경기도 남양주시 와부읍 도곡리 100)"),
+    ("miryang-plant", "밀양정수장태양광", "plant", 35.509671, 128.808532, "현장 주소 지도 확인(경남 밀양시 산외면 다원길 93)"),
+    ("yangsan-plant", "양산정수장태양광", "plant", 35.421209, 129.051431, "현장 주소 지도 확인(경남 양산시 상북면 상삼5길 126)"),
+    ("gosan-basin", "고산(침)태양광", "basin", 35.977791, 127.227034, "현장 주소 지도 확인(전북 완주군 고산면 성재리 27(침전지))"),
+    ("haepyeong-basin", "해평(침)태양광", "basin", 36.168593, 128.389972, "현장 주소 지도 확인(경북 구미시 해평면 성수문량길 467-69)"),
+    ("deokso-plant-2", "덕소(정) 제2태양광", "plant", 37.587332, 127.242044, "현장 주소 지도 확인(경기도 남양주시 와부읍 도곡리 100)"),
+    ("gumi-plant-2", "구미(정) 제2태양광", "plant", 36.166949, 128.376807, "현장 주소 지도 확인(경북 구미시 고아읍 괴평리 409-3)"),
+    ("goseong", "고성(조) 태양광", "unknown", 34.985972, 128.245686, "현장 주소 지도 확인(경남 고성군 상리면 부포리 100)"),
+    ("boryeong-floating", "보령수상태양광", "floating", 36.255720, 126.672220, "현장 주소 지도 확인(충남 보령시 미산면 용수리 2-4)"),
+    ("sihwa-bangameori", "시화방아머리태양광", "unknown", 37.291699, 126.579793, "현장 주소 지도 확인(경기도 안산시 대부북동 1982)"),
+    ("siheung-plant-2", "시흥(정)태양광#2", "plant", 37.351791, 126.792585, "현장 주소 지도 확인(경기도 안산시 단원구 선부동 1169)"),
+    ("chungju-floating", "충주수상태양광", "floating", 36.926249, 128.062698, "현장 주소 지도 확인(충북 제천시 한수면 북노리 64)"),
+    ("gumi-plant-3", "구미(정)제3태양광", "plant", 36.166949, 128.376807, "현장 주소 지도 확인(경북 구미시 고아읍 괴평리 409-3)"),
+    ("daecheong-intake", "대청취수장 육상 태양광발전소", "land", 36.531785, 127.506797, "현장 주소 지도 확인(충북 청주시 가덕면 국전리 210 (현황 자료에는 위치 없음, 혜민 님이 확인))"),
+    ("seokseong-plant", "석성(정)탄소중립태양광", "plant", 36.273088, 126.974690, "현장 주소 지도 확인(충남 부여군 석성면 왕릉로 371)"),
+    ("chungjudam-floating-3", "충주댐수상태양광#3", "floating", 36.922062, 128.064841, "현장 주소 지도 확인(충북 제천시 한수면 상노리 188-2)"),
 ]
 ASAN = ("asan-2", "아산정수장 2차발전설비", "plant", 36.7899, 127.0027, "아산시 행정중심")
 
@@ -80,7 +81,7 @@ def _plant(row, capacity_kw, data_kind, source):
     tilt, tilt_basis = factors["optimal_tilt"], factors["tilt_basis"]
     return {"id": identifier, "name": name, "type": kind, "type_label": TYPE_LABELS[kind],
             "capacity_kw": float(capacity_kw), "latitude": latitude, "longitude": longitude,
-            "coordinate_basis": basis + " · OSM Nominatim 지오코딩(±수 km, 배열 위치 아님)",
+            "coordinate_basis": basis if basis.startswith("현장 주소") else basis + " · OSM Nominatim 지오코딩(±수 km, 배열 위치 아님)",
             "tilt": float(tilt), "azimuth": 180., "orientation_basis": f"설비 제원 미확보 → 가이드라인 {tilt_basis}·정남향 가정",
             "data_kind": data_kind, "source": source}
 
