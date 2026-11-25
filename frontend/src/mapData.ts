@@ -1,5 +1,5 @@
-import type { FeatureCollection, Polygon as GeoJSONPolygon } from "geojson";
-import type { Candidate, Design, MappedCandidate, Result, Run } from "./types";
+import type { FeatureCollection, Point as GeoJSONPoint, Polygon as GeoJSONPolygon } from "geojson";
+import type { Candidate, Design, Result, Run } from "./types";
 
 export type MapMetric =
   | "grade"
@@ -131,7 +131,19 @@ export function candidateInputSignature(candidate: Candidate): string {
     water_level_m: candidate.water_level_m,
     site_type: candidate.site_type,
     reference_plant_id: candidate.reference_plant_id,
+    boundary_setback_m: candidate.boundary_setback_m ?? 0,
+    terrain_slope_deg: candidate.terrain_slope_deg ?? null,
+    slope_limit_deg: candidate.slope_limit_deg ?? 15,
+    roof_mount: candidate.roof_mount ?? "rack",
+    roof_tilt_deg: candidate.roof_tilt_deg ?? 10,
+    roof_azimuth_deg: candidate.roof_azimuth_deg ?? 180,
+    roof_allowable_load_kg_m2: candidate.roof_allowable_load_kg_m2 ?? null,
+    roof_system_load_kg_m2: candidate.roof_system_load_kg_m2 ?? null,
   });
+}
+
+export function mappedCandidate(candidates: Candidate[], id: string, siteType: Candidate["site_type"]) {
+  return candidates.find((site) => site.site_type === siteType && site.source?.includes(` · ${id} · `));
 }
 
 export function designInputSignature(design: Design): string {
@@ -171,12 +183,12 @@ function formatMetric(value: number, metric: MapMetric): string {
 
 /** Saved candidate analysis results, never an interpolated nationwide potential map. */
 export function buildDistribution(
-  candidates: MappedCandidate[],
+  candidates: Candidate[],
   designs: Design[],
   runs: Run[],
   metric: MapMetric,
   preferredDesignId?: string,
-): FeatureCollection<GeoJSONPolygon, DistributionProperties> {
+): FeatureCollection<GeoJSONPolygon | GeoJSONPoint, DistributionProperties> {
   return {
     type: "FeatureCollection",
     features: candidates.map((candidate) => {
@@ -225,7 +237,7 @@ export function buildDistribution(
       return {
         type: "Feature",
         id: candidate.id,
-        geometry: candidate.geometry,
+        geometry: candidate.geometry || { type: "Point", coordinates: [candidate.longitude, candidate.latitude] },
         properties: {
           id: candidate.id,
           name: candidate.name,
@@ -252,14 +264,14 @@ export function buildDistribution(
 }
 
 export function candidateBounds(
-  candidates: MappedCandidate[],
+  candidates: Candidate[],
 ): [number, number, number, number] | null {
   let west = Infinity;
   let south = Infinity;
   let east = -Infinity;
   let north = -Infinity;
   for (const candidate of candidates) {
-    for (const coordinate of candidate.geometry.coordinates[0] || []) {
+    for (const coordinate of candidate.geometry?.coordinates[0] || [[candidate.longitude, candidate.latitude]]) {
       const [longitude, latitude] = coordinate;
       if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) continue;
       west = Math.min(west, longitude);
@@ -311,7 +323,7 @@ export function gradeOf(result: Result | null | undefined): Grade {
 }
 
 export type SiteRanking = {
-  candidate: MappedCandidate;
+  candidate: Candidate;
   design: Design | null;
   run: Run | null;
   grade: Grade;
@@ -321,7 +333,7 @@ export type SiteRanking = {
 };
 /** Rank saved sites by their best current design (highest B/C, then NPV). */
 export function rankCandidates(
-  candidates: MappedCandidate[],
+  candidates: Candidate[],
   designs: Design[],
   runs: Run[],
 ): SiteRanking[] {

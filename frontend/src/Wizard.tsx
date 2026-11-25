@@ -1,8 +1,8 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { Check, ChevronLeft, ChevronRight, MapPin } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, MapPin, Sun, PanelsTopLeft, ShieldCheck } from "lucide-react";
 import { api, num } from "./api";
-import type { Candidate, Catalog, Design, Plant, PlantList, Run, SiteInfo, SiteType, WeatherStation, Workspace } from "./types";
+import type { Candidate, Catalog, Design, Plant, PlantList, Run, SiteInfo, SiteType, Workspace } from "./types";
 import { SITE_TYPE_OPTIONS, siteTypeLabel } from "./types";
 import { DesignEditor } from "./Editors";
 import type { Tab } from "./Editors";
@@ -17,11 +17,10 @@ import {
 } from "./Business";
 import { ReviewSteps, Verdict } from "./Steps";
 import { gradeInfo, gradeOf } from "./mapData";
-
-const SiteMap = lazy(() => import("./SiteMap"));
+import type { ClimateMode, MapSelection } from "./MapView";
 
 export const WIZARD_STEPS = [
-  { no: 1, label: "후보지 선택", title: "1단계 · 후보지 선택", lead: "지도에서 위치를 클릭하거나 K-water 보유 시설을 고르세요. 고른 좌표의 30년 기상자료가 발전량 계산에 자동으로 연결됩니다." },
+  { no: 1, label: "후보지 선택", title: "1단계 · 후보지 선택", lead: "지도에서 건축물·지상·수상 경계를 선택하면 기본 정보, 저장된 분석 결과, 규제요인을 확인할 수 있습니다." },
   { no: 2, label: "설계 조건", title: "2단계 · 설계 조건 입력", lead: "모듈·설비 용량과 패널 각도·방향을 입력합니다. ‘다음’을 누르면 저장하고 분석을 시작합니다." },
   { no: 3, label: "발전량 예측", title: "3단계 · 설치용량과 발전량 예측", lead: "설치대상지 조건과 설치용량, 운영실적으로 보정한 월별 발전량과 오차 범위입니다." },
   { no: 4, label: "공사비", title: "4단계 · 개략공사비", lead: "공사비 단가를 입력하고, 모듈·인버터(가이드라인 단가)와 부유체·계류·전기·토목(견적 가정)으로 산정한 초기 투자비를 확인합니다." },
@@ -46,7 +45,9 @@ export type WizardProps = {
   activeRun: Run | null;
   stale: boolean;
   registered: boolean;
-  mapEditor: ReactNode;
+  mapEditor: (onPoint: (point: Point | null) => void, point: Point | null,
+    selection: MapSelection, onPick: (selection: MapSelection) => void, regulationContainer: HTMLElement | null,
+    climateMode: ClimateMode) => ReactNode;
   onSelectCandidate: (id: string) => void;
   onSelectDesign: (id: string) => void;
   onPickPlant: (plant: Plant) => Promise<void>;
@@ -71,9 +72,14 @@ export type WizardProps = {
 };
 
 export default function Wizard(p: WizardProps) {
+  const [mappedSite, setMappedSite] = useState<MapSelection>(null);
+  const inspecting = p.step === 1 && !!mappedSite;
+  useEffect(() => {
+    if (p.step > 1) setMappedSite(null);
+  }, [p.step]);
   const result = p.activeRun?.status === "completed" ? p.activeRun.result : null;
   const hasRun = !!p.activeRun || p.pending;
-  const reachable = (n: number) => n === 1 || (n === 2 ? !!p.candidate && !!p.design : hasRun && !!p.design);
+  const reachable = (n: number) => n === 1 || (!inspecting && (n === 2 ? !!p.candidate && !!p.design : hasRun && !!p.design));
   const done = (n: number) =>
     n === 1 ? !!p.candidate : n === 2 ? !!result && !p.dirty : !!result && !p.stale && n < p.step;
   const info = WIZARD_STEPS[p.step - 1];
@@ -88,11 +94,11 @@ export default function Wizard(p: WizardProps) {
   }
 
   return (
-    <div className="wizard">
+    <div className={`wizard${p.step === 1 ? " map-workspace" : ""}`}>
       <ol className="stepper" aria-label="검토 단계">
         {WIZARD_STEPS.map((s) => {
           const state =
-            s.no === p.step ? "active" : done(s.no) ? "done" : reachable(s.no) ? "open" : "locked";
+            s.no === p.step ? "active" : !reachable(s.no) ? "locked" : done(s.no) ? "done" : "open";
           return (
             <li key={s.no} className={state}>
               <button
@@ -134,7 +140,7 @@ export default function Wizard(p: WizardProps) {
       )}
 
       <div className="wizard-body">
-        {p.step === 1 && <SiteStep {...p} />}
+        {p.step === 1 && <SiteStep {...p} mappedSite={mappedSite} onPickMappedSite={setMappedSite} />}
         {p.step === 2 && <DesignStep {...p} />}
         {p.step === 4 && <StepInputs {...p} tab="costs" title="공사비 단가 입력" />}
         {p.step === 5 && <StepInputs {...p} tab="finance" title="판매·재무 조건 입력" />}
@@ -170,7 +176,7 @@ export default function Wizard(p: WizardProps) {
           ))}
       </div>
 
-      <nav className="wizard-nav" aria-label="단계 이동">
+      {!inspecting && <nav className="wizard-nav" aria-label="단계 이동">
         <button className="btn" disabled={p.step === 1} onClick={() => p.setStep(p.step - 1)}>
           <ChevronLeft size={16} aria-hidden="true" /> 이전
         </button>
@@ -195,29 +201,27 @@ export default function Wizard(p: WizardProps) {
             {p.registered ? "후보지 비교 열기" : "결과 저장 · 비교에 등록"}
           </button>
         )}
-      </nav>
+      </nav>}
     </div>
   );
 }
 
-function SiteStep(p: WizardProps) {
+function SiteStep(p: WizardProps & { mappedSite: MapSelection; onPickMappedSite: (site: MapSelection) => void }) {
+  const [climateMode, setClimateMode] = useState<ClimateMode>("potential");
+  const [controlsOpen, setControlsOpen] = useState(false);
+  const [regulationContainer, setRegulationContainer] = useState<HTMLDivElement | null>(null);
   const [plants, setPlants] = useState<Plant[]>([]);
-  const [stations, setStations] = useState<WeatherStation[]>([]);
   const [picked, setPicked] = useState<Point | null>(null);
   const [pickName, setPickName] = useState("");
   const [pickType, setPickType] = useState<SiteType>("land");
   const [siteInfo, setSiteInfo] = useState<SiteInfo | null>(null);
   const [busy, setBusy] = useState(false);
-  const [editing, setEditing] = useState(false);
   const focus = picked || (p.candidate ? { latitude: p.candidate.latitude, longitude: p.candidate.longitude } : null);
 
   useEffect(() => {
     void api<PlantList>("/plants")
       .then((r) => setPlants(r.plants))
       .catch(() => setPlants([]));
-    void api<{ stations: WeatherStation[] }>("/weather-stations")
-      .then((r) => setStations(r.stations))
-      .catch(() => setStations([]));
   }, []);
   useEffect(() => {
     if (picked && siteInfo?.nearest_city && !pickName) setPickName(`${siteInfo.nearest_city} 후보지`);
@@ -235,59 +239,28 @@ function SiteStep(p: WizardProps) {
     };
   }, [focus?.latitude, focus?.longitude]);
 
-  const plantGroups: [string, Plant[]][] = [
-    ["수상(댐·저수지)", plants.filter((v) => v.type === "floating")],
-    ["정수장·침전지", plants.filter((v) => v.type === "plant" || v.type === "basin")],
-    ["기타", plants.filter((v) => !["floating", "plant", "basin"].includes(v.type))],
-  ];
   const linkedPlant = plants.find((v) => v.id === p.candidate?.reference_plant_id);
   const inKorea = (pt: Point) => pt.latitude >= 33 && pt.latitude <= 39 && pt.longitude >= 124 && pt.longitude <= 132;
 
-  async function pickPlant(plant: Plant) {
-    setPicked(null);
-    setBusy(true);
-    try {
-      await p.onPickPlant(plant);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
-    <div className="site-step">
-      <div className="site-panel">
-        <label className="field">
-          <span>K-water 보유 시설</span>
-          <select
-            aria-label="K-water 보유 시설 선택"
-            value={linkedPlant?.id || ""}
-            disabled={busy}
-            onChange={(e) => {
-              const plant = plants.find((v) => v.id === e.target.value);
-              if (plant) void pickPlant(plant);
-            }}
-          >
-            <option value="">{plants.length ? `시설 선택 (${plants.length}곳)` : "불러오는 중…"}</option>
-            {plantGroups.map(([label, list]) =>
-              list.length ? (
-                <optgroup key={label} label={label}>
-                  {list.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.name} · {num(v.capacity_kw, 0)} kW
-                    </option>
-                  ))}
-                </optgroup>
-              ) : null,
-            )}
-          </select>
-        </label>
+    <div className={`site-step climate-site-step mode-${climateMode}`}>
+      <div className={`site-panel climate-controls${controlsOpen ? " controls-open" : ""}`}>
+        <button className="climate-mobile-toggle" aria-expanded={controlsOpen} onClick={() => setControlsOpen((old) => !old)}>지도 레이어·후보지 설정 {controlsOpen ? "접기" : "열기"}</button>
+        <div className="climate-brand"><Sun size={24} /><div><strong>태양광 지도</strong><span>SOLAR ATLAS</span></div></div>
+        <nav className="climate-sections" aria-label="태양광 지도 보기">
+          {([{ id: "potential", label: "태양광 잠재량", icon: Sun }, { id: "generation", label: "태양광 발전현황", icon: PanelsTopLeft },
+            { id: "regulations", label: "규제요인", icon: ShieldCheck }] as const).map(({ id, label, icon: Icon }) =>
+            <button key={id} aria-pressed={climateMode === id} onClick={() => setClimateMode(id)}><Icon size={18} />{label}<ChevronRight size={14} /></button>)}
+        </nav>
         <label className="field">
           <span>저장된 후보지</span>
           <select
             aria-label="저장된 후보지 선택"
             value={p.candidate?.id || ""}
+            disabled={p.saving}
             onChange={(e) => {
               setPicked(null);
+              p.onPickMappedSite(null);
               p.onSelectCandidate(e.target.value);
             }}
           >
@@ -300,7 +273,15 @@ function SiteStep(p: WizardProps) {
           </select>
         </label>
 
-        {picked ? (
+        <div className="site-regulations" ref={setRegulationContainer} />
+
+        <details className="climate-site-settings"><summary>후보지 설정·편집</summary>
+        {p.mappedSite?.findKind === "region" ? null : p.mappedSite ? (
+          <div className="site-card">
+            <strong>{p.mappedSite.name || p.mappedSite.kind}</strong>
+            <p className="hint">지도 옆에서 선택한 부지의 정보를 확인하고 설계 조건 입력으로 이동하세요.</p>
+          </div>
+        ) : picked ? (
           <div className="site-card picked">
             <strong>지도에서 고른 위치</strong>
             <p className="coords">
@@ -391,11 +372,6 @@ function SiteStep(p: WizardProps) {
               <button className="btn" onClick={p.onEditCandidate}>
                 정보 수정
               </button>
-              {p.candidate.geometry && (
-                <button className="btn" onClick={() => setEditing((v) => !v)}>
-                  {editing ? "경계 편집 닫기" : "경계·배치 편집"}
-                </button>
-              )}
             </div>
             <details className="site-more">
               <summary>더보기</summary>
@@ -429,27 +405,11 @@ function SiteStep(p: WizardProps) {
             <p className="hint">시설을 고르거나 지도를 클릭해 시작하세요.</p>
           </div>
         )}
+        </details>
+        {!p.mappedSite && p.candidate && <button className="btn primary block climate-continue" disabled={!p.design || p.saving} onClick={() => p.setStep(2)}>선택 후보지 설계 조건 입력<ChevronRight size={15} /></button>}
+        <div className="climate-data-note"><i />등록 데이터로 분석 중<span>잠재량은 설치 시나리오, 발전현황은 기존 시설의 실적입니다.</span></div>
       </div>
-      <div className="card site-map-card">
-        <Suspense fallback={<div className="map-loading">지도를 불러오는 중…</div>}>
-          <SiteMap
-            plants={plants}
-            candidates={p.workspace.candidates}
-            selectedCandidateId={p.candidate?.id || ""}
-            picked={picked}
-            stations={stations}
-            nearestStation={siteInfo?.weather_station ?? null}
-            focus={focus}
-            onPlant={(plant) => void pickPlant(plant)}
-            onCandidate={(id) => {
-              setPicked(null);
-              p.onSelectCandidate(id);
-            }}
-            onPoint={setPicked}
-          />
-        </Suspense>
-      </div>
-      {editing && p.candidate?.geometry && <div className="site-editor">{p.mapEditor}</div>}
+      <div className="site-primary-map" id="site-primary-map">{p.mapEditor(setPicked, picked, p.mappedSite, p.onPickMappedSite, regulationContainer, climateMode)}</div>
     </div>
   );
 }

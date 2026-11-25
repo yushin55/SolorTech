@@ -871,7 +871,9 @@ thead th:first-child {
 .map-toolbar-actions {
   display: flex;
   gap: 6px;
+  flex-wrap: wrap;
 }
+.map-toolbar-actions select { width: auto; min-width: 110px; }
 .map-search {
   position: relative;
   flex: 1;
@@ -2686,7 +2688,7 @@ details.step:not([open]) .step-summary {
 /* 1단계: 후보지 선택 */
 .site-step {
   display: grid;
-  grid-template-columns: minmax(260px, 340px) 1fr;
+  grid-template-columns: minmax(230px, 280px) minmax(0, 1fr);
   gap: 16px;
   align-items: start;
 }
@@ -2807,6 +2809,115 @@ details.step:not([open]) .step-summary {
 }
 .site-editor {
   grid-column: 1 / -1;
+}
+.site-primary-map { min-width: 0; }
+.site-primary-map .map-body { grid-template-columns: minmax(0, 1fr) 280px; }
+.site-primary-map .map-body:has(.selected-site) { grid-template-columns: minmax(0, 1fr) 340px; }
+.site-primary-map .map-canvas { height: min(68vh, 700px); min-height: 460px; }
+.map-discovery-note { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--muted); font-size: 14px; }
+.map-discovery-note label { display: flex; align-items: center; gap: 6px; color: var(--text-2); flex-shrink: 0; white-space: nowrap; }
+.map-object-toggles { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.map-object-toggles i { width: 12px; height: 12px; border-radius: 2px; }
+.map-object-toggles label > span { color: var(--muted); font-variant-numeric: tabular-nums; }
+.map-feature-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--muted); font-size: 14px; min-height: 22px; }
+.map-object { cursor: pointer; }
+.map-discovery-note input, .regulation-panel input[type="checkbox"] {
+  flex: 0 0 18px; width: 18px; height: 18px; min-height: 0; padding: 0; margin: 0;
+}
+.regulation-panel { display: grid; gap: 10px; border-bottom: 1px solid var(--line); padding-bottom: 16px; }
+.regulation-switch, .regulation-layers label { display: flex; align-items: center; gap: 7px; font-size: 14px; }
+.regulation-switch { font-weight: 600; }
+.regulation-panel p { margin: 0; font-size: 14px; line-height: 1.6; }
+.regulation-status { padding: 10px; border-radius: 6px; background: #fff7ed; color: #9a3412; }
+.regulation-result { display: grid; gap: 6px; padding: 12px; background: #f1f5f9; border-radius: 8px; font-size: 14px; }
+.regulation-result.overlap { background: #fff1f2; color: #9f1239; }
+.regulation-hit { display: flex; align-items: center; gap: 6px; }
+.regulation-hit i, .regulation-layers i { flex-shrink: 0; width: 10px; height: 10px; border-radius: 2px; }
+.regulation-layers summary { cursor: pointer; font-size: 14px; margin-bottom: 8px; }
+.regulation-layers label { margin: 8px 0; }
+.regulation-panel a { font-size: 14px; align-self: center; }
+.regulation-panel[hidden] { display: none; }
+.regulation-opacity { display: grid; gap: 4px; font-size: 13px; }
+.regulation-opacity input { width: 100%; accent-color: var(--primary); }
+.site-regulations .regulation-panel { padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.site-regulations .regulation-layers { max-height: 360px; overflow-y: auto; }
+.site-solar-badge { display: inline-block; padding: 5px 9px; border-radius: 6px; background: #e6f4ee; color: #16624a; font-size: 12px; font-weight: 600; }
+.site-solar-references { font-size: 13px; }
+.site-solar-references summary, .official-solar-stats summary { cursor: pointer; }
+.site-solar-references ul { list-style: none; padding: 0; display: grid; gap: 12px; }
+.site-solar-references li { display: grid; gap: 3px; }
+.site-solar-references small { color: var(--muted); }
+.operating-facility { padding: 12px 0; border-top: 1px solid var(--line); }
+.operating-facility h5 { margin: 8px 0; font-size: 14px; }
+.official-solar-stats { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 13px; }
+.kwater-facility-icon { display: flex; align-items: center; justify-content: center; border: 2px solid white; border-radius: 50%; background: #005596; color: white; box-shadow: 0 2px 6px #0005; }
+.kwater-facility-icon.water { background: #007ca3; }
+.kwater-facility-icon.land { background: #936319; }
+.selected-site { display: grid; gap: 12px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+.selected-site-heading { display: flex; justify-content: space-between; align-items: center; }
+.selected-site-heading .close { position: static; width: 28px; height: 28px; padding: 0; }
+.selected-site-kicker { color: var(--primary); font-size: 14px; font-weight: 700; }
+.selected-site h3 { margin: 0; font-size: 20px; line-height: 1.4; }
+.selected-site h4 { margin: 0; font-size: 16px; }
+.selected-site p { margin: 0; line-height: 1.6; font-size: 14px; }
+.selected-site-address { color: var(--muted); }
+.selected-site-facts { display: grid; gap: 0; margin: 0; }
+.selected-site-facts > div { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 8px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.selected-site-facts dt { color: var(--muted); }
+.selected-site-facts dd { margin: 0; overflow-wrap: anywhere; }
+.selected-site-facts.region-overview > div { grid-template-columns: minmax(0, 1fr) auto; }
+.selected-site-facts.region-overview dd { font-weight: 650; }
+.selected-site-empty { display: grid; gap: 10px; padding: 12px 0; }
+.selected-site-empty p { color: var(--muted); }
+.selected-site-error { color: #b91c1c; background: #fef2f2; padding: 10px; border-radius: 6px; }
+.selected-site-prediction { display: grid; gap: 12px; padding: 14px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; }
+.selected-site-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 8px; margin: 0; }
+.selected-site-metrics dt { color: var(--muted); font-size: 14px; }
+.selected-site-metrics dd { margin: 4px 0 0; font-size: 21px; font-weight: 700; color: var(--primary); }
+.selected-site-metrics small { font-size: 12px; font-weight: 400; }
+.region-solar-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: 8px; background: #eef3f7; }
+.region-solar-tabs button {
+  flex: 1 0 auto;
+  min-height: 36px;
+  padding: 4px 7px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+}
+.region-solar-tabs button:hover { background: #e0ebf4; }
+.region-solar-tabs button[aria-pressed="true"] { background: #005596; color: #fff; }
+.region-solar-content, .region-solar-chart { display: grid; gap: 10px; min-width: 0; }
+.region-solar-chart h5 { margin: 0; font-size: 14px; }
+.region-solar-table { width: 100%; border-collapse: collapse; text-align: right; font-size: 13px; font-variant-numeric: tabular-nums; }
+.region-solar-table th, .region-solar-table td { padding: 9px 6px; border-bottom: 1px solid var(--line); }
+.region-solar-table th:first-child { text-align: left; }
+.region-solar-table thead { background: #eef3f7; }
+.region-solar-table td { font-weight: 650; }
+.region-solar-total { display: grid; gap: 8px; padding: 14px; border: 1px solid #dae7f1; border-radius: 8px; background: #f2f7fb; }
+.region-solar-total > strong { color: #005596; font-size: 27px; font-variant-numeric: tabular-nums; }
+.region-solar-total .selected-site-metrics dd { font-size: 18px; }
+.region-solar-bars { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
+.region-solar-bars li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; font-size: 13px; }
+.region-solar-bar { grid-column: 1 / -1; height: 6px; border-radius: 8px; background: #edf2f6; overflow: hidden; }
+.region-solar-bar > div { height: 100%; border-radius: 8px; background: #227d9b; }
+.region-source, .region-empty { color: var(--muted); font-size: 13px; }
+.rank-panel:has(.selected-site) { max-height: 700px; }
+.map-body:has(.selected-site) .selected-site ~ .regulation-panel { margin-top: 4px; }
+@media (max-width: 1400px) {
+  .site-step { grid-template-columns: 1fr; }
+  .site-primary-map { grid-row: 1; }
+  .site-panel { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+  .site-panel > .site-card { grid-column: 1 / -1; }
+}
+@media (max-width: 800px) {
+  .site-primary-map .map-body, .site-primary-map .map-body:has(.selected-site) { grid-template-columns: 1fr; }
+  .site-primary-map .map-canvas { height: 55vh; min-height: 360px; max-height: 520px; }
+  .site-primary-map :is(.rank-panel, .selected-site) { scroll-margin-top: 84px; }
+  .site-panel { display: flex; }
 }
 
 /* 2단계: 설계 조건 */
@@ -3487,5 +3598,213 @@ strong.negative {
   .app.guide-open {
     padding-right: 0;
   }
+}
+
+/* Map workspace: controls, analysis summary, and a full-height map. */
+.app:has(.climate-map) { grid-template-columns: 72px minmax(0, 1fr); height: 100dvh; overflow: hidden; }
+.app:has(.climate-map) .sidebar { padding: 16px 7px; gap: 16px; }
+.app:has(.climate-map) .brand { width: 42px; height: 42px; overflow: hidden; padding: 0; margin: 0 auto; }
+.app:has(.climate-map) .brand img { width: 206px; max-width: none; height: 42px; object-fit: cover; object-position: left; }
+.app:has(.climate-map) .brand small, .app:has(.climate-map) .sidebar-foot { display: none; }
+.app:has(.climate-map) .nav-group { padding: 8px 0; }
+.app:has(.climate-map) .nav button { display: flex; flex-direction: column; gap: 5px; padding: 10px 2px; text-align: center; border-radius: 8px; }
+.app:has(.climate-map) .nav-label { font-size: 10px; line-height: 1.4; max-width: 58px; }
+.app:has(.climate-map) .nav button svg { width: 21px; height: 21px; }
+.app:has(.climate-map) .main { padding: 0; gap: 0; height: 100dvh; overflow: hidden; background: white; }
+.app:has(.climate-map) .topbar { flex: 0 0 64px; height: 64px; padding: 10px 20px; margin: 0; z-index: 850; background: white; }
+.app:has(.climate-map) .topbar .btn { min-height: 34px; }
+.app:has(.climate-map) .page-header, .app:has(.climate-map) .footer { display: none; }
+.map-workspace { display: flex; flex-direction: column; min-height: 0; flex: 1; gap: 0; }
+.map-workspace > .stepper { order: 2; flex: 0 0 48px; min-height: 48px; margin: 0; padding: 6px 22px; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: white; }
+.map-workspace > .stepper li button { padding: 0; display: flex; flex-direction: row; justify-content: center; gap: 7px; }
+.map-workspace > .stepper .dot { width: 25px; height: 25px; font-size: 11px; }
+.map-workspace > .stepper .label { margin: 0; font-size: 11px; }
+.map-workspace > .stepper li::before, .map-workspace > .stepper li::after { display: none; }
+.map-workspace > .wizard-head, .map-workspace > .wizard-nav { display: none; }
+.map-workspace > .wizard-body { flex: 1; min-height: 0; }
+.climate-site-step { height: 100%; grid-template-columns: 224px minmax(0, 1fr); gap: 0; align-items: stretch; }
+.climate-controls { padding: 0 14px 20px; height: 100%; min-height: 0; gap: 16px; overflow: auto; border-right: 1px solid var(--line); background: #fbfcfd; }
+.climate-brand { display: flex; align-items: center; gap: 9px; padding: 20px 0 15px; color: #086ca7; }
+.climate-brand strong { display: block; font-size: 18px; letter-spacing: -.5px; }
+.climate-brand span { display: block; font-size: 9px; letter-spacing: 2px; color: #7394a8; }
+.climate-sections { display: grid; gap: 4px; margin: -4px -6px 4px; padding-bottom: 15px; border-bottom: 1px solid var(--line); }
+.climate-sections button { display: flex; align-items: center; gap: 8px; padding: 12px 10px; border-radius: 7px; color: #627687; font-size: 12px; text-align: left; font-weight: 600; }
+.climate-sections button > svg:last-child { margin-left: auto; }
+.climate-sections button[aria-pressed="true"] { background: #076ca8; color: white; box-shadow: 0 3px 8px #0055961a; }
+.climate-controls .field > span { font-size: 11px; color: #60778a; }
+.climate-controls select { min-height: 35px; border-radius: 5px; padding: 5px; font-size: 11px; }
+.climate-layer-controls { padding: 0; }
+.climate-layer-controls[hidden] { display: none; }
+.climate-layer-controls h3 { font-size: 12px; color: #27495e; margin: 0 0 14px; }
+.climate-control-caption { color: #91a0ac; font-size: 10px; letter-spacing: .4px; margin: 16px 0 7px; }
+.climate-layer-row { display: flex; align-items: center; gap: 7px; min-height: 33px; font-size: 11px; color: #425c6e; cursor: pointer; }
+.climate-layer-row input { width: 13px; height: 13px; min-height: 0; margin: 0 2px 0 0; accent-color: #0874b2; }
+.climate-layer-row i { display: grid; place-items: center; width: 23px; height: 23px; border-radius: 50%; background: #b89270; color: white; }
+.climate-layer-row.water i { background: #008da3; }
+.climate-layer-row.land i { background: #a26036; }
+.climate-layer-row.other i { background: #9753b6; }
+.climate-layer-row .boundary-key { width: 12px; height: 12px; border-radius: 2px; }
+.climate-layer-row > span { margin-left: auto; font-size: 10px; color: #93a6b1; }
+.climate-opacity { display: grid; grid-template-columns: 1fr auto; gap: 8px; font-size: 10px; color: #6c8392; margin: 15px 0; }
+.climate-opacity input { grid-column: 1 / -1; grid-row: 2; padding: 0; min-height: 12px; height: 12px; accent-color: #0873ad; }
+.climate-control-note { font-size: 10px; color: #889aa7; line-height: 1.8; }
+.climate-site-settings { padding: 14px 0; border-top: 1px solid var(--line); font-size: 11px; }
+.climate-site-settings > summary { color: #3b5e73; cursor: pointer; font-weight: 600; }
+.climate-site-settings .site-card { padding: 12px 0; border: 0; background: none; }
+.climate-site-settings :is(p, .hint, .field-note, .btn, label, dt, dd, summary) { font-size: 11px; }
+.climate-continue.btn { padding: 8px; min-height: 36px; font-size: 10px; white-space: normal; }
+.climate-data-note { margin-top: auto; font-size: 10px; color: #54768a; padding-top: 18px; border-top: 1px solid var(--line); }
+.climate-data-note i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #29a079; margin-right: 5px; }
+.climate-data-note span { display: block; margin-top: 7px; color: #94a3af; line-height: 1.7; }
+.climate-site-step .site-regulations .regulation-panel { padding: 0; border: 0; background: none; }
+.climate-controls .regulation-panel :is(p, a, label, summary, span) { font-size: 10px; }
+.climate-controls .regulation-panel h4 { font-size: 12px; }
+.climate-controls .regulation-layers { max-height: 310px; }
+.climate-site-step .site-primary-map { min-height: 0; height: 100%; }
+.climate-site-step .map-card { padding: 0; border: 0; border-radius: 0; height: 100%; }
+.climate-site-step .map-card > .card-heading, .climate-site-step .map-card > .hint { display: none; }
+.climate-map { position: relative; height: 100%; min-height: 0; display: block; }
+.climate-map .map-body { display: grid; grid-template-columns: 264px minmax(0, 1fr) !important; gap: 0; height: 100%; }
+.climate-map .map-canvas { grid-column: 2; grid-row: 1; height: 100% !important; min-height: 0 !important; border-radius: 0; }
+.climate-map .map-host { height: 100%; border: 0; border-radius: 0; }
+.climate-map .climate-summary { grid-column: 1; grid-row: 1; padding: 0; border: 0; border-right: 1px solid var(--line); border-radius: 0; max-height: none; height: 100%; background: white; overflow: auto; }
+.climate-summary .selected-site { padding: 0; }
+.climate-summary .selected-site-heading { padding: 12px 16px; background: #096eaa; color: white; }
+.climate-summary .selected-site-kicker { color: white; font-size: 12px; }
+.climate-summary .selected-site > h3 { color: #0c76b1; padding: 22px 17px 9px; font-size: 14px; text-align: center; }
+.climate-summary .selected-site-address { font-size: 10px; text-align: center; padding: 0 14px; }
+.climate-summary .region-solar-content { padding: 13px 17px; }
+.climate-summary .region-solar-content > h4 { font-size: 12px; color: #3e5c70; }
+.climate-summary .rank-note { font-size: 10px; color: #8b9da9; line-height: 1.75; }
+.climate-summary .site-solar-badge { margin: 9px 0; padding: 3px 6px; font-size: 9px; font-weight: 500; }
+.climate-summary .selected-site-metrics { gap: 14px 8px; padding: 16px 0; border-top: 1px solid #eef2f4; border-bottom: 1px solid #eef2f4; margin: 12px 0; }
+.climate-summary .selected-site-metrics dt { font-size: 10px; color: #8b9ba6; }
+.climate-summary .selected-site-metrics dd { font-size: 15px; color: #28475c; }
+.climate-summary .selected-site-metrics dd small { font-size: 9px; }
+.climate-summary .site-solar-references, .climate-summary .official-solar-stats { font-size: 10px; }
+.climate-summary .official-solar-stats { margin: 6px 17px 20px; }
+.solar-headline { padding: 22px 0 12px; text-align: center; color: #0876b4; }
+.solar-headline > span { display: block; margin-bottom: 6px; font-size: 11px; color: #6d8291; }
+.solar-headline > strong { font-size: 31px; font-weight: 750; letter-spacing: -1.3px; line-height: 1.2; }
+.solar-headline small { font-size: 10px; font-weight: 500; margin-left: 6px; letter-spacing: 0; }
+.solar-headline.actual { color: #087d8c; }
+.solar-month-chart { margin: 22px 0; padding: 16px 12px 12px; border: 1px solid #e3eaf0; border-radius: 8px; background: white; }
+.solar-month-chart figcaption { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; margin-bottom: 16px; color: #4d6779; }
+.solar-month-chart figcaption > span { font-size: 9px; color: #9aabb7; }
+.solar-month-chart ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
+.solar-month-chart li { display: grid; grid-template-columns: 23px minmax(0, 1fr); gap: 4px; align-items: center; font-size: 9px; color: #8396a3; }
+.solar-month-track { height: 13px; position: relative; background: #f4f7f9; border-radius: 2px; overflow: hidden; }
+.solar-month-bar { height: 100%; background: #56bde0; border-radius: 2px; }
+.solar-month-bar.winter { background: #aabec9; }.solar-month-bar.spring { background: #f2b52d; }.solar-month-bar.summer { background: #ff9474; }.solar-month-bar.autumn { background: #77c9e7; }
+.solar-month-track b { position: absolute; inset: 0 4px 0 auto; font-size: 8px; font-weight: 600; color: #486474; line-height: 13px; text-shadow: 0 0 3px white; }
+.solar-month-chart > p { margin-top: 10px; color: #96a5b0; font-size: 8px; line-height: 1.6; }
+.solar-year-select { display: flex; gap: 8px; align-items: center; color: #7d919f; font-size: 10px; margin: 12px 0; }
+.solar-year-select select { min-height: 30px; padding: 3px 5px; font-size: 10px; border-radius: 4px; }
+.climate-map > .map-toolbar { position: absolute; z-index: 650; top: 16px; left: 280px; right: 18px; padding: 0; margin: 0; background: none; border: 0; pointer-events: none; }
+.climate-map .map-toolbar > * { pointer-events: auto; }
+.climate-map .map-search { max-width: 320px; }
+.climate-map .map-search form { border: 0; box-shadow: 0 2px 14px #18394825; border-radius: 5px; overflow: hidden; }
+.climate-map .map-search input { min-height: 40px; font-size: 11px; }
+.climate-map .map-toolbar-actions { background: white; border-radius: 5px; padding: 2px; box-shadow: 0 2px 12px #18394820; gap: 0; }
+.climate-map .map-toolbar-actions .btn { min-height: 36px; padding: 0 9px; font-size: 10px; border: 0; }
+.climate-map > .map-feature-status { position: absolute; z-index: 600; bottom: 12px; left: 280px; max-width: 470px; padding: 7px 10px; border-radius: 4px; background: #ffffffed; box-shadow: 0 1px 8px #18394815; font-size: 9px; min-height: 0; }
+.climate-map > .map-modes { position: absolute; z-index: 650; top: 116px; right: 16px; display: grid; padding: 4px; margin: 0; background: #fffffff5; border: 1px solid #dfe8ee; border-radius: 6px; box-shadow: 0 2px 10px #18394815; }
+.climate-map > .map-modes button { font-size: 9px; padding: 8px 6px; border: 0; border-radius: 3px; min-height: 30px; }
+.climate-map .map-basemap { top: 70px; right: 16px; bottom: auto; padding: 3px; border-radius: 5px; }
+.climate-map .map-basemap button { font-size: 10px; padding: 5px 8px; }
+.climate-map .map-zoom { top: auto; bottom: 65px; right: 16px; }
+.climate-map .map-zoom button { width: 34px; height: 34px; }
+.climate-map > .map-legend { display: none; }
+.climate-map-title { position: absolute; z-index: 450; top: 70px; left: 16px; pointer-events: none; color: white; text-shadow: 0 1px 4px #001d35; }
+.climate-map-title > span { font-size: 12px; font-weight: 650; }
+.climate-map-title small { display: block; margin-top: 3px; font-size: 9px; color: #ffffffc9; }
+.climate-map-popup { position: absolute; z-index: 700; top: 115px; right: 86px; width: 325px; max-height: calc(100% - 155px); overflow: auto; background: white; box-shadow: 0 8px 36px #0c32413d; border: 1px solid #e2e9ed; border-radius: 9px; }
+.climate-map-popup > .selected-site { padding: 17px; }
+.climate-map-popup :is(p, dt, dd, .rank-note, .btn) { font-size: 11px; }
+.climate-map-popup .selected-site h3 { font-size: 15px; }
+.climate-map-popup .region-solar-tabs { display: none; }
+.climate-map-popup .selected-site-facts { gap: 7px; }
+.facility-popup { padding: 17px; }
+.facility-popup > header { display: flex; align-items: start; justify-content: space-between; gap: 10px; margin-bottom: 15px; }
+.facility-popup header span { color: #0875b0; font-size: 10px; font-weight: 600; }
+.facility-popup h3 { font-size: 15px; margin-top: 4px; color: #254b63; }
+.facility-facts { margin: 0 0 15px; font-size: 10px; border: 1px solid #dce6ec; }
+.facility-facts > div { display: grid; grid-template-columns: 75px minmax(0, 1fr); border-bottom: 1px solid #e4ecf2; }
+.facility-facts > div:last-child { border: 0; }
+.facility-facts dt { padding: 8px; margin: 0; color: #207cae; background: #f2f8fc; }
+.facility-facts dd { padding: 8px; margin: 0; word-break: break-word; }
+.facility-popup .operating-solar > h4, .facility-popup .operating-solar > .site-solar-badge, .facility-popup .operating-facility > h5,
+.facility-popup .operating-facility > .selected-site-metrics { display: none; }
+.facility-popup .solar-headline { padding: 10px 0; }
+.facility-popup .solar-headline strong { font-size: 25px; }
+.climate-facility-pin, .climate-candidate-pin { background: none !important; box-shadow: none !important; border: 0 !important; padding: 0 !important; display: block; }
+.climate-facility-pin > span, .climate-candidate-pin > span { position: absolute; inset: 0 0 8px; display: grid; place-items: center; color: white; border: 2px solid white; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); background: #af8a6a; box-shadow: 0 2px 5px #0005; }
+.climate-facility-pin svg, .climate-candidate-pin svg { transform: rotate(45deg); }
+.climate-facility-pin.water > span, .climate-candidate-pin.water > span { background: #04a5b5; }
+.climate-facility-pin.land > span, .climate-candidate-pin.land > span { background: #b4653e; }
+.climate-facility-pin.other > span { background: #9a52c3; }
+.climate-candidate-pin.selected > span { border-color: #ffe35b; box-shadow: 0 0 0 4px #ffe35b55, 0 2px 5px #0005; }
+.climate-candidate-pin { min-width: 0; max-width: none; bottom: auto; outline: none !important; }
+.climate-candidate-pin::after { display: none; }
+.climate-regulation-intro { padding: 24px 20px; }
+.climate-regulation-intro > span { font-size: 9px; color: #80a0b5; letter-spacing: 1.6px; }
+.climate-regulation-intro h3 { margin: 8px 0 18px; color: #0872a9; font-size: 18px; }
+.climate-regulation-intro p, .climate-regulation-intro li, .climate-regulation-intro small { font-size: 11px; color: #7a929f; line-height: 1.9; }
+.climate-regulation-intro ol { margin: 20px 0; padding-left: 17px; }
+.climate-mobile-toggle { display: none; }
+@media (max-width: 1200px) and (min-width: 761px) {
+  .climate-site-step { grid-template-columns: 200px minmax(0, 1fr); }
+  .climate-map .map-body { grid-template-columns: 235px minmax(0, 1fr) !important; }
+  .climate-map > .map-toolbar, .climate-map > .map-feature-status { left: 248px; }
+  .climate-map .map-toolbar-actions { display: none; }
+  .climate-map .map-search { max-width: 290px; }
+  .app:has(.climate-map) .topbar-meta { display: none; }
+}
+@media (max-width: 760px) {
+  .app:has(.climate-map) { display: block; height: auto; min-height: 100dvh; overflow: visible; }
+  .app:has(.climate-map) .sidebar { height: 52px; position: relative; display: flex; flex-direction: row; padding: 7px 12px; align-items: center; overflow: hidden; border-bottom: 1px solid var(--line); }
+  .app:has(.climate-map) .brand { flex: 0 0 36px; height: 36px; margin: 0; }
+  .app:has(.climate-map) .brand img { height: 36px; width: 180px; }
+  .app:has(.climate-map) .nav { flex: 1; display: flex; overflow-x: auto; height: 40px; }
+  .app:has(.climate-map) .nav-group { display: flex; flex: 0 0 auto; padding: 0; border: 0; }
+  .app:has(.climate-map) .nav button { flex-direction: row; gap: 5px; padding: 6px 10px; white-space: nowrap; }
+  .app:has(.climate-map) .nav button svg { width: 14px; height: 14px; }
+  .app:has(.climate-map) .nav-label { max-width: none; font-size: 10px; }
+  .app:has(.climate-map) .main { height: auto; overflow: visible; }
+  .app:has(.climate-map) .topbar { padding: 7px 12px; height: 50px; flex-basis: 50px; flex-wrap: nowrap; gap: 6px; z-index: 750; }
+  .app:has(.climate-map) .project-switch { flex: 1; min-width: 0; }
+  .app:has(.climate-map) .project-switch > span, .app:has(.climate-map) .topbar-meta { display: none; }
+  .app:has(.climate-map) .project-switch select { min-width: 0; width: 100%; font-size: 10px; min-height: 30px; }
+  .app:has(.climate-map) .topbar .btn { min-height: 30px; padding: 0 7px; font-size: 10px; }
+  .app:has(.climate-map) .topbar .dropdown { display: none; }
+  .map-workspace > .stepper { order: 2; flex-basis: 42px; min-height: 42px; padding: 6px; position: sticky; bottom: 0; z-index: 800; }
+  .map-workspace > .stepper .label { display: none; }
+  .climate-site-step { display: flex; flex-direction: column; height: auto; gap: 0; }
+  .climate-controls { height: auto; min-height: 0; padding: 0 12px 8px; border-right: 0; overflow: visible; gap: 8px; }
+  .climate-mobile-toggle { display: block; padding: 8px 0; color: #6b8597; font-size: 10px; text-align: left; }
+  .climate-controls:not(.controls-open) > :not(.climate-mobile-toggle):not(.climate-sections) { display: none; }
+  .climate-sections { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; padding: 0; margin: 0; border: 0; }
+  .climate-sections button { justify-content: center; gap: 5px; padding: 9px 4px; font-size: 10px; }
+  .climate-sections button > svg { width: 14px; height: 14px; }
+  .climate-sections button > svg:last-child { display: none; }
+  .climate-controls.controls-open .climate-layer-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 0 15px; }
+  .climate-controls .climate-control-caption, .climate-controls .climate-layer-controls > h3, .climate-controls .climate-opacity, .climate-controls .climate-control-note { grid-column: 1 / -1; }
+  .climate-map .map-body { display: flex; flex-direction: column; height: auto; }
+  .climate-map .map-canvas { height: 58dvh !important; min-height: 370px !important; flex: 0 0 auto; }
+  .climate-map .climate-summary { max-height: none; height: auto; overflow: visible; }
+  .climate-summary .selected-site-heading { padding: 10px 17px; }
+  .climate-summary .region-solar-content { padding: 16px 22px; }
+  .climate-summary .selected-site > h3 { padding-top: 17px; }
+  .climate-map > .map-toolbar { top: 12px; left: 12px; right: 12px; }
+  .climate-map .map-search { max-width: calc(100% - 5px); width: 100%; }
+  .climate-map .map-toolbar-actions { display: none; }
+  .climate-map > .map-feature-status { top: max(calc(58dvh - 30px), 340px); bottom: auto; left: 12px; right: 55px; max-height: 24px; overflow: hidden; font-size: 8px; padding: 4px 6px; }
+  .climate-map > .map-modes { top: 113px; right: 10px; }
+  .climate-map > .map-modes button { font-size: 8px; padding: 6px 3px; }
+  .climate-map .map-basemap { top: 64px; right: 10px; }
+  .climate-map .map-zoom { bottom: 45px; right: 10px; }
+  .climate-map-popup { top: 103px; right: 57px; width: calc(100% - 74px); max-height: calc(100% - 140px); }
+  .climate-map-title { top: 65px; left: 12px; }
+  .solar-month-chart { max-width: 440px; margin: 20px auto; }
 }
 

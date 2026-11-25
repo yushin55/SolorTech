@@ -10,6 +10,8 @@ import copy
 import math
 import os
 
+from shapely.geometry import Point, shape
+
 from . import waterbodies as osm
 
 # Individual buildings remain selectable even when they are smaller than an industrial roof.
@@ -19,7 +21,7 @@ KINDS = {
         # One request covers roughly a town; dense cities hold many large roofs.
         "max_width": 0.1, "max_height": 0.08, "step": 50,
         "warning": "이 범위에서 OpenStreetMap에 등록된 30 m² 이상 건축물을 찾지 못했습니다.",
-        "cache": "building-v2", "limit": 500,
+        "cache": "building-v3", "limit": 500,
         "attribution": "건축물 외곽 © OpenStreetMap contributors · ODbL (지붕 구조·하중·소유 미확인)",
     },
     "land": {
@@ -95,13 +97,34 @@ def find_sites(kind, west, south, east, north):
     osm._validate_bbox(west, south, east, north, spec["max_width"], spec["max_height"])
     query, classify = _QUERIES[kind]
     key = osm._snap(west, south, east, north, spec["step"])
-    with osm._lock:
-        rows = [row for row in osm._rows_for(key, spec["cache"], query,
-                                             lambda payload: osm._parse(payload, classify, spec["min_area"]),
-                                             spec["subject"])
-                if osm._intersects(row, west, south, east, north)]
+    # A cached roof click must not wait behind a different viewport's network
+    # search. Disk files are written with atomic replace by the OSM cache.
+    cached = osm._read_disk(key, spec["cache"])
+    if cached is None:
+        with osm._lock:
+            cached = osm._rows_for(key, spec["cache"], query,
+                                   lambda payload: osm._parse(payload, classify, spec["min_area"]),
+                                   spec["subject"])
+    rows = [row for row in cached if osm._intersects(row, west, south, east, north)]
     return copy.deepcopy({
         "kind": kind, "site_type": spec["site_type"],
         "results": rows[:spec["limit"]], "total": len(rows), "attribution": spec["attribution"],
         "warning": None if rows else spec["warning"],
     })
+
+
+def building_at(latitude, longitude):
+    """Identify the actual footprint covering a map click, including boundary points.
+
+    Nearby roofs are never substituted for an empty point or an inner courtyard.
+    """
+    if not (math.isfinite(latitude) and math.isfinite(longitude)
+            and 33 <= latitude <= 39 and 124 <= longitude <= 132):
+        raise ValueError("국내 위치의 건축물만 선택할 수 있습니다.")
+    pad = .001
+    result = find_sites("building", longitude - pad, latitude - pad, longitude + pad, latitude + pad)
+    point = Point(longitude, latitude)
+    matches = [row for row in result["results"] if shape(row["geometry"]).covers(point)]
+    selected = min(matches, key=lambda row: row["area_m2"]) if matches else None
+    return {"building": selected, "attribution": result["attribution"],
+            "warning": None if selected else "클릭한 위치에 등록된 건축물 경계가 없습니다. 파란 건축물 경계를 선택하거나 다른 건물을 클릭하세요."}

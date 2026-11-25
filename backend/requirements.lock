@@ -48,6 +48,7 @@ pydantic==2.12.3
 pydantic_core==2.41.4
 Pygments==2.21.0
 PyJWT==2.15.1
+pyarrow==26.0.1
 pyproj==3.7.2
 pytest==8.4.2
 python-dateutil==2.9.0.post0

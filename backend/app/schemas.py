@@ -123,6 +123,11 @@ class Equipment(StrictModel):
     energy_basis: Literal["calibrated", "physics"] = "calibrated"
 
 
+class SolarEstimateRequest(StrictModel):
+    candidate: CandidateCreate
+    equipment: Equipment | None = None
+
+
 class Costs(StrictModel):
     """가이드라인 ④개략공사비. 모듈·인버터는 가이드라인 단가, 나머지는 사용자 견적 가정."""
     float_per_kw: NonNegative = 300000

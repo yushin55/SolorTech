@@ -45,7 +45,6 @@ import type {
   Workspace,
 } from "./types";
 import Wizard, { WIZARD_STEPS } from "./Wizard";
-import { hasGeometry } from "./types";
 import MapView from "./MapLoader";
 import { CandidateForm } from "./Editors";
 import {
@@ -53,6 +52,7 @@ import {
   designInputSignature,
   gradeInfo,
   gradeOf,
+  mappedCandidate,
 } from "./mapData";
 import Validation from "./Validation";
 import SolarTech from "./SolarTech";
@@ -565,14 +565,9 @@ export default function App() {
     };
     setModal({ kind: "candidate", candidate: c, isNew: true });
   }
-  function newCandidateFromWater(water: WaterBody, siteType: SiteType = "floating") {
+  function mappedSite(water: WaterBody, siteType: SiteType): Omit<Candidate, "id" | "project_id"> {
     const layer = siteType === "floating" ? "수면 경계" : siteType === "building" ? "건축물 외곽" : "토지이용 경계";
-    setModal({
-      kind: "candidate",
-      isNew: true,
-      candidate: {
-        id: "",
-        project_id: projectId,
+    return {
         name:
           water.name ||
           `이름 없는 ${water.kind} (${num(water.area_m2 / 10000, 1)} ha)`,
@@ -586,9 +581,48 @@ export default function App() {
         water_level_m: null,
         site_type: siteType,
         reference_plant_id: null,
-        source: `${layer} © OpenStreetMap contributors · ${water.id} · ${num(water.area_m2 / 10000, 1)} ha`,
-      },
-    });
+        source: `${layer} · ${water.id} · ${water.data_source || "© OpenStreetMap contributors"} · ${num(water.area_m2 / 10000, 1)} ha`.slice(0, 300),
+      };
+  }
+  async function prepareMappedSite(water: WaterBody, siteType: SiteType, preferredDesignId?: string) {
+    if (!catalog || !workspace) throw new Error("설계 기본값을 불러온 뒤 다시 시도하세요.");
+    setSaving(true);
+    try {
+      const payload = mappedSite(water, siteType);
+      const existing = mappedCandidate(workspace.candidates, water.id, siteType);
+      const boundary = { geometry: water.geometry, latitude: water.latitude, longitude: water.longitude };
+      const changed = existing && candidateInputSignature(existing) !== candidateInputSignature({ ...existing, ...boundary });
+      const c = existing ? changed
+        ? await mutate<Candidate>(`/candidates/${existing.id}`, "PATCH", { ...boundary, source: payload.source })
+        : existing
+        : await mutate<Candidate>(`/projects/${projectId}/candidates`, "POST", payload);
+      const alternatives = workspace.designs.filter((item) => item.candidate_id === c.id);
+      let d = alternatives.find((item) => item.id === preferredDesignId) || alternatives[0];
+      if (!d) {
+        const defaults = designDefaults(siteType);
+        d = await mutate<Design>(`/projects/${projectId}/designs`, "POST", {
+          ...defaults, name: "지도 선택 기본안", candidate_id: c.id,
+          equipment: { ...defaults.equipment, capacity_mode: "area", area_use_pct: siteType === "floating" ? 10 : 65 },
+        });
+      }
+      if (!existing || changed || !alternatives.length) await refreshWorkspace(projectId);
+      setCandidateId(c.id);
+      if (d.id !== designId) {
+        setDraft(structuredClone(d));
+        setActiveRun(workspace.runs.filter((run) => run.design_id === d.id)
+          .sort((a, b) => b.created_at.localeCompare(a.created_at))[0] || null);
+      }
+      setDesignId(d.id);
+      setHistoryId("");
+      setStep(2);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (error) {
+      // Reuse any records saved before a partial failure.
+      await refreshWorkspace(projectId).catch(handleError);
+      throw error;
+    } finally {
+      setSaving(false);
+    }
   }
   async function saveCandidate(value: Candidate, isNew = false) {
     try {
@@ -603,7 +637,9 @@ export default function App() {
       const d =
         isNew && catalog
           ? await mutate<Design>(`/projects/${projectId}/designs`, "POST", {
-              ...catalog.defaults,
+              ...designDefaults(value.site_type),
+              ...(value.geometry ? { equipment: { ...designDefaults(value.site_type).equipment,
+                capacity_mode: "area", area_use_pct: value.site_type === "floating" ? 10 : 65 } } : {}),
               name: "기본안",
               candidate_id: c.id,
             })
@@ -936,7 +972,6 @@ export default function App() {
       )[0]
     : null;
   const showRun = page === "report";
-  const mappable = workspace?.candidates.filter(hasGeometry) || [];
   return (
     <div className={"app" + (guideOpen ? " guide-open" : "")}>
       <aside className="sidebar">
@@ -963,11 +998,12 @@ export default function App() {
                       key={n.id}
                       className={page === n.id ? "active" : ""}
                       aria-current={page === n.id ? "page" : undefined}
+                      aria-label={n.label}
                       title={n.hint}
                       onClick={() => setPage(n.id)}
                     >
                       <Icon size={18} strokeWidth={1.9} aria-hidden="true" />
-                      {n.label}
+                      <span className="nav-label">{n.label}</span>
                     </button>
                   );
                 })}
@@ -1112,6 +1148,7 @@ export default function App() {
           <>
             {page === "review" && (
               <Wizard
+                key={projectId}
                 step={step}
                 setStep={setStep}
                 workspace={workspace}
@@ -1147,29 +1184,35 @@ export default function App() {
                 onDeleteDesign={() => design && void remove("design", design.id)}
                 onExportGeo={exportGeo}
                 onImportGeo={(f) => void importGeo(f)}
-                mapEditor={
-                  candidate && hasGeometry(candidate) ? (
-                    <Card title="경계·배치 편집" className="map-card">
+                mapEditor={(onPoint, pickedPoint, selection, onPick, regulationContainer, climateMode) => (
+                    <Card title="태양광 후보지 지도" className="map-card">
                       <Suspense fallback={<div className="map-loading">지도를 불러오는 중…</div>}>
                         <MapView
                           candidate={candidate}
                           result={stale ? null : result}
-                          candidates={mappable}
+                          candidates={workspace.candidates}
                           designs={mapDesigns}
                           runs={workspace.runs}
                           selectedDesignId={designId}
-                          onSelectCandidate={selectCandidate}
+                          onSelectCandidate={(id) => { onPoint(null); selectCandidate(id); }}
                           onAddCandidate={newCandidate}
                           onUpdate={updateCandidate}
-                          onAddWater={newCandidateFromWater}
+                          selection={selection}
+                          onPick={onPick}
+                          regulationContainer={regulationContainer}
+                          climateMode={climateMode}
+                          onPickPlant={pickPlant}
+                          onContinueSite={prepareMappedSite}
+                          preparingSite={saving}
+                          onPoint={onPoint}
+                          pickedPoint={pickedPoint}
                         />
                       </Suspense>
                       <p className="hint">
                         경계 그리기·제외 구역·연결점을 지정하면 설치 가능 면적과 배치가 반영됩니다.
                       </p>
                     </Card>
-                  ) : null
-                }
+                  )}
               />
             )}
             {page === "data" && <PlantRecords onError={handleError} />}

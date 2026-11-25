@@ -18,14 +18,14 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
-from . import calibration, generation, kma, kwater, solartech, stations, weather
+from . import calibration, generation, kma, kwater, mapfeatures, regulations, roofprints, solar_regions, solartech, stations, weather
 from .engine import catalog, siting, guideline
 from .geocoding import search_places
 from .legacy_data import readable
 from .seed import seed_candidates
-from .sitefinder import find_sites
+from .sitefinder import building_at, find_sites
 from .waterbodies import find_water_bodies
-from .schemas import CandidateCreate, DesignCreate, Equipment, ProjectCreate, ProjectPatch, defaults
+from .schemas import CandidateCreate, DesignCreate, Equipment, ProjectCreate, ProjectPatch, SolarEstimateRequest, defaults
 from .store import create_repository
 from .validation import MAX_BYTES, parse_timestamp, read_csv, validate_measurements
 
@@ -395,6 +395,49 @@ def create_app(repository=None, seed=None):
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
 
+    @app.post("/api/solar-status")
+    def solar_operating_status(payload: SolarEstimateRequest):
+        from .solar_status import status
+
+        candidate = payload.candidate.model_dump()
+        if not (33 <= candidate["latitude"] <= 39 and 124 <= candidate["longitude"] <= 132):
+            raise HTTPException(422, "국내 좌표만 조회할 수 있습니다.")
+        return status(candidate)
+
+    @app.post("/api/solar-potential")
+    def solar_installation_potential(payload: SolarEstimateRequest):
+        from .solar_estimate import potential
+
+        candidate = payload.candidate.model_dump()
+        if not (33 <= candidate["latitude"] <= 39 and 124 <= candidate["longitude"] <= 132):
+            raise HTTPException(422, "국내 좌표만 계산할 수 있습니다.")
+        try:
+            return potential(candidate, payload.equipment.model_dump() if payload.equipment else None)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.post("/api/solar-estimate")
+    def solar_estimate(payload: SolarEstimateRequest):
+        from .solar_estimate import estimate
+
+        candidate = payload.candidate.model_dump()
+        if not (33 <= candidate["latitude"] <= 39 and 124 <= candidate["longitude"] <= 132):
+            raise HTTPException(422, "국내 좌표만 계산할 수 있습니다.")
+        try:
+            return estimate(candidate, payload.equipment.model_dump() if payload.equipment else None)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.get("/api/solar-region/location")
+    def solar_region_location(latitude: float = Query(..., ge=33, le=39),
+                              longitude: float = Query(..., ge=124, le=132)):
+        return solar_regions.location_at(latitude, longitude)
+
+    @app.get("/api/solar-region")
+    def solar_region_summary(latitude: float = Query(..., ge=33, le=39),
+                             longitude: float = Query(..., ge=124, le=132)):
+        return solar_regions.at(latitude, longitude)
+
     @app.get("/api/solartech/assets")
     def solartech_assets():
         return solartech.load_registry()
@@ -467,10 +510,83 @@ def create_app(repository=None, seed=None):
             touch(repo, identifier)
         return {"candidate": candidate, "design": design, "already_imported": False}
 
+    @app.get("/api/regulations/catalog")
+    def regulation_catalog():
+        return regulations.catalog()
+
+    @app.get("/api/regulations")
+    def regulation_map(west: float, south: float, east: float, north: float):
+        try:
+            return regulations.search(west, south, east, north)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+
+    @app.post("/api/regulations/check")
+    def regulation_check(payload: CandidateCreate):
+        try:
+            return regulations.check(payload.model_dump())
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+
     @app.get("/api/water-bodies")
     def water_bodies(west: float, south: float, east: float, north: float):
         try:
             return find_water_bodies(west, south, east, north)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        except PermissionError as error:
+            raise HTTPException(503, str(error)) from error
+        except ConnectionError as error:
+            raise HTTPException(502, str(error)) from error
+
+    @app.get("/api/roofprints")
+    def roofprint_viewport(west: float, south: float, east: float, north: float):
+        try:
+            return {"results": roofprints.viewport(west, south, east, north), "attribution": roofprints.ATTRIBUTION}
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        except PermissionError as error:
+            raise HTTPException(503, str(error)) from error
+        except ConnectionError as error:
+            raise HTTPException(502, str(error)) from error
+
+    @app.get("/api/roofprints/identify")
+    def identify_roofprint(latitude: float, longitude: float):
+        try:
+            return {"feature": roofprints.identify(latitude, longitude), "attribution": roofprints.ATTRIBUTION}
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        except PermissionError as error:
+            raise HTTPException(503, str(error)) from error
+        except ConnectionError as error:
+            raise HTTPException(502, str(error)) from error
+
+    @app.get("/api/map-features")
+    def map_features(west: float, south: float, east: float, north: float):
+        try:
+            return mapfeatures.viewport(west, south, east, north)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        except PermissionError as error:
+            raise HTTPException(503, str(error)) from error
+        except ConnectionError as error:
+            raise HTTPException(502, str(error)) from error
+
+    @app.get("/api/map-features/identify")
+    def identify_map_feature(latitude: float, longitude: float):
+        try:
+            return mapfeatures.identify(latitude, longitude)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        except PermissionError as error:
+            raise HTTPException(503, str(error)) from error
+        except ConnectionError as error:
+            raise HTTPException(502, str(error)) from error
+
+    @app.get("/api/site-candidates/building-at")
+    def identify_building(latitude: float, longitude: float):
+        try:
+            return building_at(latitude, longitude)
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
         except PermissionError as error:

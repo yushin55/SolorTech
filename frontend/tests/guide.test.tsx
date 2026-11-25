@@ -14,7 +14,8 @@ it("has a guide for every wizard step and page, and closes on Escape", () => {
   }
   const onClose = vi.fn();
   render(<GuidePanel guideKey="step1" where="사업성 검토 · 1단계 / 6" title="1단계" onClose={onClose} onOpenHelp={vi.fn()} />);
-  expect(screen.getByText(/이 위치를 후보지로 등록/)).toBeTruthy();
+  expect(screen.getByText(/기본 정보와 저장된 분석 결과, 규제요인/)).toBeTruthy();
+  expect(screen.getAllByText("다음 · 설계 조건 입력").length).toBeGreaterThan(0);
   fireEvent.keyDown(screen.getByRole("complementary", { name: "도우미" }), { key: "Escape" });
   expect(onClose).toHaveBeenCalled();
 });

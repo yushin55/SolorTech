@@ -500,12 +500,19 @@ export type Catalog = {
 };
 export type WaterBody = {
   id: string;
+  data_source?: string;
   name: string | null;
   kind: string;
   area_m2: number;
   latitude: number;
   longitude: number;
   geometry: Polygon;
+  building_info?: {
+    address: string | null;
+    levels: string | null;
+    height: string | null;
+    roof_shape: string | null;
+  };
 };
 export type WaterSearch = {
   results: WaterBody[];

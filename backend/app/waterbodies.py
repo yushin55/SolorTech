@@ -26,7 +26,8 @@ OVERPASS_URLS = (
     "https://overpass-api.de/api/interpreter",
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 )
-USER_AGENT = "Solar-Site-Workspace/1.0 (Korean floating solar feasibility desktop workspace)"
+RETRY_DELAY = 2.0  # seconds before the second round after a 5xx/429/network failure
+USER_AGENT ="Solar-Site-Workspace/1.0 (Korean floating solar feasibility desktop workspace)"
 ATTRIBUTION = "수면 경계 © OpenStreetMap contributors · ODbL (실측 수면 아님)"
 MAX_WIDTH, MAX_HEIGHT = 0.8, 0.6  # degrees; keeps one request to a few city districts
 MIN_AREA_M2 = 10_000  # 1 ha; smaller ponds rarely fit a floating array
@@ -70,7 +71,7 @@ def _fetch(url, query):
         return response.json()
 
 
-def _request(query):
+def _race(query):
     pool = ThreadPoolExecutor(max_workers=len(OVERPASS_URLS))
     futures = [pool.submit(_fetch, url, query) for url in OVERPASS_URLS]
     try:
@@ -83,6 +84,24 @@ def _request(query):
         raise error
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _transient(error):
+    if isinstance(error, httpx.HTTPStatusError):
+        return error.response.status_code == 429 or error.response.status_code >= 500
+    return isinstance(error, httpx.TransportError)
+
+
+def _request(query):
+    # Public Overpass instances often answer 502/504 for a moment and then
+    # succeed, so one quick second round saves the user a manual reload.
+    try:
+        return _race(query)
+    except (httpx.HTTPError, ValueError) as error:
+        if not _transient(error):
+            raise
+        time.sleep(RETRY_DELAY)
+        return _race(query)
 
 
 def _line(points):
@@ -122,8 +141,10 @@ def _coordinate_count(polygon):
     return len(polygon.exterior.coords) + sum(len(ring.coords) for ring in polygon.interiors)
 
 
-def _fit(polygon):
+def _fit(polygon, preserve_small_holes=False):
     """Simplify until the shoreline fits the candidate schema; drop tiny islands first."""
+    if preserve_small_holes and polygon.is_valid and _coordinate_count(polygon) <= MAX_COORDINATES:
+        return polygon
     for tolerance in (0.00002, 0.00005, 0.0001, 0.0002, 0.0005):
         shape = polygon.simplify(tolerance, preserve_topology=True)
         if not shape.is_valid:
@@ -133,7 +154,7 @@ def _fit(polygon):
         if shape.geom_type != "Polygon" or shape.is_empty:
             return None
         islands = sorted(shape.interiors, key=lambda r: Polygon(r).area, reverse=True)
-        shape = Polygon(shape.exterior, [r for r in islands[:100] if Polygon(r).area > 1e-8])
+        shape = Polygon(shape.exterior, islands if preserve_small_holes else [r for r in islands[:100] if Polygon(r).area > 1e-8])
         if _coordinate_count(shape) <= MAX_COORDINATES and shape.is_valid:
             return shape
     return None
@@ -146,7 +167,7 @@ def _water_kind(tags):
     return "저수지" if tags.get("landuse") == "reservoir" else KIND_LABELS.get(water, "수면")
 
 
-def _parse(payload, classify=_water_kind, min_area=MIN_AREA_M2):
+def _parse(payload, classify=_water_kind, min_area=MIN_AREA_M2, preserve_small_holes=False):
     """Polygons of at least min_area whose tags classify() labels; None skips a feature."""
     if not isinstance(payload, dict) or not isinstance(payload.get("elements"), list):
         raise ValueError("Invalid Overpass response")
@@ -175,12 +196,12 @@ def _parse(payload, classify=_water_kind, min_area=MIN_AREA_M2):
             minx, miny, maxx, maxy = part.bounds
             if maxx - minx > 1 or maxy - miny > 1:
                 continue  # Larger than one candidate may cover.
-            shape = _fit(part)
+            shape = _fit(part, preserve_small_holes=preserve_small_holes or bool(tags.get("building")))
             if shape is None:
                 continue
             point = shape.representative_point()
             identifier = f"{element.get('type')}/{element.get('id')}" + (f"-{index}" if index else "")
-            results.append({
+            row = {
                 "id": identifier,
                 "name": name,
                 "kind": kind,
@@ -188,7 +209,18 @@ def _parse(payload, classify=_water_kind, min_area=MIN_AREA_M2):
                 "latitude": round(point.y, 6),
                 "longitude": round(point.x, 6),
                 "geometry": mapping(shape),
-            })
+            }
+            if tags.get("building"):
+                address = tags.get("addr:full") or " ".join(str(tags.get(key, "")).strip() for key in
+                    ("addr:province", "addr:city", "addr:district", "addr:street", "addr:housenumber")
+                    if tags.get(key))
+                row["building_info"] = {
+                    "address": str(address).strip()[:300] or None,
+                    "levels": str(tags.get("building:levels", "")).strip()[:30] or None,
+                    "height": str(tags.get("height", "")).strip()[:30] or None,
+                    "roof_shape": str(tags.get("roof:shape", "")).strip()[:50] or None,
+                }
+            results.append(row)
     # The same feature can be tagged as both a way and a relation member.
     seen, unique = set(), []
     for row in sorted(results, key=lambda r: r["area_m2"], reverse=True):

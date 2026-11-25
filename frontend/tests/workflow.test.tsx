@@ -13,9 +13,25 @@ import {
 import userEvent from "@testing-library/user-event";
 import App from "../src/App";
 import { CandidateForm } from "../src/Editors";
-import type { Candidate, Design, Run } from "../src/types";
+import type { Candidate, Design, Run, SiteType } from "../src/types";
+import type { MapSelection, Picked } from "../src/MapView";
 vi.mock("../src/MapView", () => ({
-  default: () => <div data-testid="map">좌표 편집 지도</div>,
+  default: ({ selection, onPick, onContinueSite }: {
+    selection: MapSelection;
+    onPick: (site: Picked) => void;
+    onContinueSite: (site: Picked, type: SiteType) => Promise<void>;
+  }) => <div data-testid="map">
+    좌표 편집 지도
+    {(["building", "land", "floating"] as const).map((type) => <button key={type} onClick={() => onPick({
+      id: `way/${type}`, name: `지도 ${type} 부지`, kind: type, area_m2: 1000,
+      findKind: type === "floating" ? "water" : type,
+      latitude: 36.5, longitude: 127,
+      geometry: { type: "Polygon", coordinates: [[[127, 36.5], [127.001, 36.5], [127.001, 36.501], [127, 36.501], [127, 36.5]]] },
+    })}>지도 선택 {type}</button>)}
+    {selection && selection.findKind !== "region" && <button onClick={() => void onContinueSite(selection, selection.findKind === "water" ? "floating" : selection.findKind)}>
+      다음 · 설계 조건 입력
+    </button>}
+  </div>,
 }));
 vi.mock("../src/SiteMap", () => ({
   default: () => <div data-testid="site-map">후보지 선택 지도</div>,
@@ -298,11 +314,12 @@ function fixtureResult(d: Design) {
     },
   };
 }
-let designs: Design[], runs: Run[], clock: number;
+let candidates: Candidate[], designs: Design[], runs: Run[], clock: number;
 beforeEach(() => {
   localStorage.clear();
   clock = 0;
   designs = [structuredClone(initial)];
+  candidates = [structuredClone(original)];
   runs = [];
   const project = {
     id: "p1",
@@ -342,7 +359,16 @@ beforeEach(() => {
           runs: [],
         };
       else if (path.endsWith("/workspace"))
-        value = { project, candidates: [original], designs, runs };
+        value = { project, candidates, designs, runs };
+      else if (method === "POST" && path === "/projects/p1/candidates") {
+        const c = { ...body, id: `c${candidates.length + 1}`, project_id: "p1" };
+        candidates.push(c);
+        value = c;
+      } else if (method === "POST" && path === "/projects/p1/designs") {
+        const d = { ...body, id: `d${designs.length + 1}`, project_id: "p1" };
+        designs.push(d);
+        value = d;
+      }
       else if (path.endsWith("/duplicate")) {
         const source = designs.find((d) => path.includes(d.id))!;
         const d = {
@@ -353,6 +379,10 @@ beforeEach(() => {
         };
         designs.push(d);
         value = d;
+      } else if (method === "PATCH" && path.startsWith("/candidates/")) {
+        const c = candidates.find((item) => path.endsWith(item.id))!;
+        Object.assign(c, body);
+        value = c;
       } else if (method === "PATCH" && path.startsWith("/designs/")) {
         const d = designs.find((d) => path.includes(d.id))!;
         Object.assign(d, body, { updated_at: String(++clock) });
@@ -368,7 +398,7 @@ beforeEach(() => {
           error: null,
           snapshot: {
             project,
-            candidate: structuredClone(original),
+            candidate: structuredClone(candidates.find((c) => c.id === d.candidate_id)!),
             design: structuredClone(d),
           },
           result: fixtureResult(d),
@@ -388,6 +418,66 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+});
+describe("mapped site review", () => {
+  it("preserves the saved candidate on click and uses the mapped boundary when continuing", async () => {
+    const edited = { ...structuredClone(original), id: "c2", site_type: "building" as const,
+      latitude: 37, longitude: 128, source: "건축물 외곽 · way/building · 9.9 ha" };
+    candidates.push(edited);
+    designs.push({ ...structuredClone(initial), id: "d2", candidate_id: "c2" });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "지도 선택 building" }, { timeout: 5000 }));
+    expect(candidates[1].longitude).toBe(128);
+    expect(runs).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "다음 · 설계 조건 입력" }));
+    await screen.findByRole("heading", { name: "2단계 · 설계 조건 입력" });
+    expect(runs).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "저장하고 분석" }));
+    await waitFor(() => expect(runs).toHaveLength(1));
+    expect(runs[0].snapshot.candidate).toMatchObject({ id: "c2", latitude: 36.5, longitude: 127 });
+    expect(runs[0].snapshot.candidate.geometry?.coordinates[0]).toEqual([
+      [127, 36.5], [127.001, 36.5], [127.001, 36.501], [127, 36.501], [127, 36.5],
+    ]);
+    expect(candidates).toHaveLength(2);
+  });
+  it.each(["building", "land", "floating"] as SiteType[])("previews %s, accepts design inputs and runs the chosen site through to business results", async (type) => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "지도 선택 building" }, { timeout: 5000 }));
+    fireEvent.click(screen.getByRole("button", { name: `지도 선택 ${type}` }));
+    expect(screen.getByRole("heading", { name: "1단계 · 후보지 선택" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "다음", exact: true })).toBeNull();
+    expect(candidates).toHaveLength(1);
+    expect(designs).toHaveLength(1);
+    expect(runs).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "다음 · 설계 조건 입력" }));
+    await screen.findByRole("heading", { name: "2단계 · 설계 조건 입력" });
+    expect(runs).toHaveLength(0);
+    const c = candidates.find((site) => site.site_type === type && site.id !== "c1")!;
+    expect(c.geometry?.coordinates[0][0]).toEqual([127, 36.5]);
+    const d = designs.find((item) => item.candidate_id === c.id)!;
+    expect(d.equipment.capacity_mode).toBe("area");
+    expect(d.equipment.area_use_pct).toBe(type === "floating" ? 10 : 65);
+    if (type !== "floating") expect(d.costs).toMatchObject({ float_per_kw: 0, mooring_per_kw: 0 });
+    fireEvent.change(await screen.findByRole("spinbutton", { name: /경계 면적 이용률/ }), { target: { value: "25" } });
+    fireEvent.click(screen.getByRole("button", { name: "저장하고 분석" }));
+    await screen.findByRole("heading", { name: "3단계 · 설치용량과 발전량 예측" });
+    expect(runs[0].snapshot.candidate.id).toBe(c.id);
+    expect(runs[0].snapshot.design.equipment.area_use_pct).toBe(25);
+    const finalStep = screen.getByRole("button", { name: /사업성 결과$/ });
+    await waitFor(() => expect((finalStep as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(finalStep);
+    await screen.findByRole("heading", { name: "6단계 · 사업성 분석 결과" });
+    expect(screen.getAllByText(/B\/C/).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "후보지 선택" }));
+    fireEvent.click(await screen.findByRole("button", { name: `지도 선택 ${type}` }));
+    expect(screen.getByRole("heading", { name: "1단계 · 후보지 선택" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "다음 · 설계 조건 입력" }));
+    await screen.findByRole("heading", { name: "2단계 · 설계 조건 입력" });
+    expect(candidates).toHaveLength(2);
+    expect(designs).toHaveLength(2);
+    expect(runs).toHaveLength(1);
+    expect((await screen.findByRole("spinbutton", { name: /경계 면적 이용률/ }) as HTMLInputElement).value).toBe("25");
+  });
 });
 describe("candidate data integrity", () => {
   it("saves unknown optional survey data as null without requiring invented values", async () => {

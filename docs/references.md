@@ -40,8 +40,8 @@ Firestore는 React에서 직접 쓰지 않고 FastAPI의 Admin SDK 어댑터로 
 
 ## 실제 수면(저수지·호수) 경계
 
-- ‘이 지역 수면 찾기’는 사용자가 버튼을 누를 때만 보이는 지도 범위(최대 경도 0.8° × 위도 0.6°, 0.1° 격자로 확장)를 공개 [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API)(overpass-api.de, maps.mail.ru 동시 요청 후 먼저 온 응답 사용)로 보낸다. 검색어·프로젝트 정보는 보내지 않는다.
-- 대상: `natural=water`, `landuse=reservoir`. 하천·수로(`water=river|canal|stream|ditch|drain|moat|wastewater|lock` 등)는 제외하고 1 ha 이상만 남긴다. 섬은 폴리곤 구멍으로 유지해 배치에서 빠진다.
+- 지도 이동·확대 시 건축물·지상·수상 경계를 함께 자동 로드한다. 보이는 지도 범위(최대 경도 0.08° × 위도 0.06°, 0.01° 격자)와 미조회 위치를 클릭한 좌표만 공개 [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API)로 보내며 검색어·프로젝트 정보는 보내지 않는다. `is_in`·`pivot`은 화면 밖에 외곽 꼭짓점이 있는 큰 토지·수면 경계도 포함하기 위해 사용한다. [Overpass 공식 영역 필터 문서](https://dev.overpass-api.de/overpass-doc/en/full_data/area.html)를 기준으로 구현했다.
+- 지도 표시·클릭 대상은 건축물·토지이용·피복·주차장·공원 등의 면 경계와 `natural=water`, `landuse=reservoir` 수면 경계다. 지도 레이어에는 후보지 검색용 최소 면적·상위 개수 제한이나 농지·임야 제외 조건을 적용하지 않는다. 섬·중정 등의 구멍은 유지한다. 기존 `/water-bodies`, `/site-candidates` API의 후보지 선별 조건은 새 지도 레이어와 별개다.
 - 경계는 OpenStreetMap 기여자 지도 자료([ODbL](https://www.openstreetmap.org/copyright))이며 측량 수면이 아니다. 수위에 따라 실제 수면 면적이 달라진다.
 - 결과는 서버 메모리(24시간)와 `backend/data/water-cache`(30일)에 캐시한다. 공용 서버는 혼잡할 때 첫 조회에 30초~1분이 걸리거나 실패할 수 있다. `WATER_PROVIDER=off`로 끌 수 있다.
 

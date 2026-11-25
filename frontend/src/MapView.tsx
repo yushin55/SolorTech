@@ -1,37 +1,49 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ComponentProps } from "react";
+import { createPortal } from "react-dom";
 import * as L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import type {
   SiteType,
   Candidate,
-  MappedCandidate,
   Design,
   Polygon,
   Result,
   Run,
   WaterBody,
   WaterSearch,
+  Plant,
+  PlantList,
 } from "./types";
 import MapSearch from "./MapSearch";
+import Regulations from "./Regulations";
+import SelectedSite from "./SelectedSite";
+import FacilityPopup from "./FacilityPopup";
+import type { MapFacility } from "./FacilityPopup";
+import type { SiteTab } from "./SelectedSite";
 import { typeIconSvg } from "./typeIcons";
 import type { FindKind } from "./typeIcons";
 import type { SearchLocation } from "./MapSearch";
 import { api, num } from "./api";
 import {
   buildDistribution,
+  candidateInputSignature,
   candidateBounds,
+  designInputSignature,
   getMetricLegend,
   gradeInfo,
   metricDefinitions,
+  mappedCandidate,
   rankCandidates,
 } from "./mapData";
-import type { Grade, MapMetric, SiteRanking } from "./mapData";
+import type { MapMetric, SiteRanking } from "./mapData";
 type Mode = "view" | "polygon" | "exclusion" | "grid" | "edit";
 type Basemap = "street" | "satellite" | "none";
+export type ClimateMode = "potential" | "generation" | "regulations";
 type Props = {
-  candidate: MappedCandidate | null;
+  candidate: Candidate | null;
   result: Result | null;
-  candidates: MappedCandidate[];
+  candidates: Candidate[];
   designs: Design[];
   runs: Run[];
   selectedDesignId?: string;
@@ -39,34 +51,44 @@ type Props = {
   onAddCandidate: (position: { latitude: number; longitude: number }) => void;
   onUpdate: (data: Partial<Candidate>) => Promise<void>;
   onAnalyzeAll?: () => void;
-  onAddWater?: (water: WaterBody, siteType: SiteType) => void;
+  selection: MapSelection;
+  onPick: (selection: MapSelection) => void;
+  onContinueSite?: (site: WaterBody, siteType: SiteType, preferredDesignId?: string) => Promise<void>;
+  preparingSite?: boolean;
+  onPoint?: (position: { latitude: number; longitude: number }) => void;
+  pickedPoint?: { latitude: number; longitude: number } | null;
+  regulationContainer?: HTMLElement | null;
+  onPickPlant?: (plant: Plant) => Promise<void>;
+  climateMode?: ClimateMode;
 };
 // Matches the server's per-request limits (waterbodies.py · sitefinder.py).
-const FIND: Record<FindKind, { stroke: string; active: string; fill: string; width: number; height: number; label: string; obj: string; siteType: SiteType; busy: string; note: string; empty: string }> = {
+// `selected` is the fill of a picked boundary; it contrasts with that layer's own `fill`.
+const FIND: Record<FindKind, { stroke: string; active: string; fill: string; selected: string; width: number; height: number; label: string; obj: string; siteType: SiteType; busy: string; note: string; empty: string }> = {
   water: {
-    stroke: "#005596", active: "#003a68", fill: "#00b9ed",
+    stroke: "#005596", active: "#003a68", fill: "#00b9ed", selected: "#ffffff",
     width: 0.8, height: 0.6, label: "수면", obj: "수면을", siteType: "floating", busy: "저수지·호수 경계",
-    note: "점선 사각형 안의 1 ha 이상 저수지·호수·연못입니다.", empty: "이 범위에서 수면을 찾지 못했습니다.",
+    note: "수면 경계입니다. 경계를 선택하면 수상 태양광 설계로 검토합니다.", empty: "이 범위에 등록된 수면 경계가 없습니다.",
   },
   land: {
-    stroke: "#a16207", active: "#713f12", fill: "#facc15",
+    stroke: "#a16207", active: "#713f12", fill: "#facc15", selected: "#38bdf8",
     width: 0.3, height: 0.2, label: "지상 부지", obj: "지상 부지를", siteType: "land", busy: "유휴 부지·주차장 경계",
-    note: "점선 사각형 안의 2,000 m² 이상 유휴 부지·주차장·매립지·염전·초지입니다. 농지·임야는 찾지 않습니다.",
+    note: "농지·산림 등을 포함한 토지이용·피복 경계입니다. 지적 필지나 설치 허용 여부를 나타내지 않습니다.",
     empty: "이 범위에서 지상 부지를 찾지 못했습니다.",
   },
   building: {
-    stroke: "#7e22ce", active: "#581c87", fill: "#c084fc",
+    stroke: "#38bdf8", active: "#facc15", fill: "#7dd3fc", selected: "#7dd3fc",
     width: 0.1, height: 0.08, label: "건축물", obj: "건축물을", siteType: "building", busy: "건축물 외곽",
-    note: "점선 사각형 안의 30 m² 이상 건축물입니다. 지붕 구조·하중·소유는 확인되지 않았습니다.",
+    note: "지도에 등록된 건축물 외곽입니다. 지붕 구조·하중·소유는 별도 확인합니다.",
     empty: "이 범위에서 건축물을 찾지 못했습니다.",
   },
 };
-const KINDS: FindKind[] = ["water", "land", "building"];
-function TypeIcon({ kind }: { kind: FindKind }) {
-  return <span className="type-icon" dangerouslySetInnerHTML={{ __html: typeIconSvg(kind) }} />;
-}
+const KINDS: FindKind[] = ["land", "water", "building"];
 type FoundLayer = WaterSearch & { bbox: [number, number, number, number] };
-type Picked = WaterBody & { findKind: FindKind };
+export type Picked = WaterBody & { findKind: FindKind };
+type RegionPick = { findKind: "region"; latitude: number; longitude: number; identifying?: boolean };
+export type MapSelection = Picked | RegionPick | null;
+type MapFeature = WaterBody & { feature_type: FindKind };
+const asPicked = ({ feature_type, ...body }: MapFeature): Picked => ({ ...body, findKind: feature_type });
 const hectares = (m2: number) => num(m2 / 10000, m2 < 100000 ? 1 : 0);
 const waterName = (w: WaterBody) => w.name || `이름 없는 ${w.kind}`;
 function inRing(x: number, y: number, ring: number[][]) {
@@ -79,14 +101,6 @@ function inRing(x: number, y: number, ring: number[][]) {
   }
   return inside;
 }
-const onWater = (c: MappedCandidate, waters: WaterBody[]) =>
-  waters.some(
-    (w) =>
-      inRing(c.longitude, c.latitude, w.geometry.coordinates[0]) &&
-      !w.geometry.coordinates
-        .slice(1)
-        .some((hole) => inRing(c.longitude, c.latitude, hole)),
-  );
 const KOREA: [number, number, number, number] = [125.3, 33, 130.9, 38.7];
 const toBounds = (
   b: [number, number, number, number],
@@ -157,38 +171,96 @@ export default function MapView({
   onSelectCandidate,
   onAddCandidate,
   onUpdate,
-  onAnalyzeAll,
-  onAddWater,
+  selection,
+  onPick: setPicked,
+  onContinueSite,
+  preparingSite = false,
+  onPoint,
+  pickedPoint,
+  regulationContainer,
+  onPickPlant,
+  climateMode,
 }: Props) {
   const host = useRef<HTMLDivElement>(null),
+    infoPanel = useRef<HTMLElement>(null),
     map = useRef<L.Map | null>(null),
     tiles = useRef<Record<Exclude<Basemap, "none">, L.TileLayer> | null>(null),
-    latest = useRef({ candidate, onUpdate, onSelectCandidate });
-  latest.current = { candidate, onUpdate, onSelectCandidate };
+    latest = useRef({ candidate, onUpdate, onSelectCandidate, onPoint, preparingSite });
+  latest.current = { candidate, onUpdate, onSelectCandidate, onPoint, preparingSite };
   const [mode, setMode] = useState<Mode>("view"),
     [draft, setDraft] = useState<number[][]>([]),
     [ready, setReady] = useState(false),
-    [basemap, setBasemap] = useState<Basemap>("street"),
+    [basemap, setBasemap] = useState<Basemap>("satellite"),
     [tileError, setTileError] = useState(false),
     [busy, setBusy] = useState(false),
     [mapError, setMapError] = useState("");
-  const [metric, setMetric] = useState<MapMetric>("grade"),
+  const [metric, setMetric] = useState<MapMetric>(climateMode ? "none" : "grade"),
     [target, setTarget] = useState<SearchLocation | null>(null),
     [center, setCenter] = useState({ latitude: 36.4, longitude: 127.8 });
-  const [findKind, setFindKind] = useState<FindKind>("water");
   const [found, setFound] = useState<Partial<Record<FindKind, FoundLayer>>>({}),
     [hidden, setHidden] = useState<FindKind[]>([]),
     [waterBusy, setWaterBusy] = useState(false),
-    [waterError, setWaterError] = useState(""),
-    [picked, setPicked] = useState<Picked | null>(null),
-    [panel, setPanel] = useState<"rank" | "water">("rank");
-  // Water layer alone decides whether a floating candidate sits on mapped water.
-  const water = found.water ?? null;
-  const shownKinds = KINDS.filter((k) => found[k] && !hidden.includes(k));
+    [waterError, setWaterError] = useState("");
+  const [viewportHint, setViewportHint] = useState("지도를 확대하면 건축물·지상·수상 경계가 함께 표시됩니다.");
+  const [roofLayer, setRoofLayer] = useState<FoundLayer | null>(null);
+  const [roofStatus, setRoofStatus] = useState<"loading" | "ready" | "unavailable">("loading");
+  const [selectionError, setSelectionError] = useState("");
+  const [plants, setPlants] = useState<Plant[]>([]);
+  const [plantError, setPlantError] = useState("");
+  const [assets, setAssets] = useState<MapFacility[]>([]);
+  const [activeFacility, setActiveFacility] = useState<MapFacility | null>(null);
+  const [facilityHidden, setFacilityHidden] = useState<string[]>([]);
+  const [overlayOpacity, setOverlayOpacity] = useState(35);
+  const [siteTab, setSiteTab] = useState<SiteTab>("overview");
+  const [showSavedDetails, setShowSavedDetails] = useState(true);
+  const regionPoint = selection?.findKind === "region" ? selection : null;
+  const selectionLoading = !!regionPoint?.identifying;
+  const picked = selection?.findKind === "region" ? null : selection;
+  const activeSiteTab = regionPoint && siteTab === "overview" ? "potential" : siteTab;
+  const selectionAbort = useRef<AbortController | null>(null);
+  useEffect(() => {
+    if (selectionLoading) return () => selectionAbort.current?.abort();
+  }, [selectionLoading]);
+  const clickSelection = useRef<(point: { latitude: number; longitude: number }) => void>(() => {});
+  clickSelection.current = (point) => { void identifyFeature(point); };
+  const searchAbort = useRef<AbortController | null>(null);
+  const searchVersion = useRef(0);
+  const foundLatest = useRef(found);
+  foundLatest.current = found;
+  const roofResults = useMemo(() => {
+    if (!roofLayer?.results.length) return found.building;
+    const osmById = new Map(found.building?.results.map((roof) => [roof.id, roof]));
+    return { ...roofLayer, results: roofLayer.results.map((roof) => {
+      const osmRoof = osmById.get(roof.id);
+      if (!osmRoof) return roof;
+      return { ...roof, name: osmRoof.name || roof.name, building_info: roof.building_info ? {
+        address: osmRoof.building_info?.address || roof.building_info.address,
+        levels: roof.building_info.levels || osmRoof.building_info?.levels || null,
+        height: roof.building_info.height || osmRoof.building_info?.height || null,
+        roof_shape: roof.building_info.roof_shape || osmRoof.building_info?.roof_shape || null,
+      } : osmRoof.building_info };
+    }) };
+  }, [roofLayer, found.building]);
+  const layers = { ...found, building: roofResults };
+  const shownKinds = KINDS.filter((kind) => layers[kind] && !hidden.includes(kind));
   const sites: Picked[] = shownKinds
-    .flatMap((k) => found[k]!.results.map((site) => ({ ...site, findKind: k })))
+    .flatMap((kind) => layers[kind]!.results.map((site) => ({ ...site, findKind: kind })))
     .sort((a, b) => b.area_m2 - a.area_m2);
-  const foundTotal = KINDS.reduce((sum, k) => sum + (found[k]?.total ?? 0), 0);
+  const foundTotal = KINDS.reduce((sum, kind) => sum + (layers[kind]?.total ?? 0), 0);
+  const pickedType = picked ? FIND[picked.findKind].siteType : !regionPoint && candidate ? candidate.site_type : "building";
+  const selectedSite = picked ? mappedCandidate(candidates, picked.id, pickedType) : !regionPoint ? candidate : null;
+  const siteRuns = selectedSite ? runs.filter((run) => designs.some((design) => design.id === run.design_id
+    && design.candidate_id === selectedSite.id)) : [];
+  const preferredDesign = designs.find((design) => design.id === selectedDesignId && design.candidate_id === selectedSite?.id);
+  const selectedRun = siteRuns.filter((run) => run.status === "completed" && run.result
+    && (!preferredDesign || run.design_id === preferredDesign.id))
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))[0] || null;
+  const selectedDesign = preferredDesign || designs.find((design) => design.id === selectedRun?.design_id)
+    || designs.find((design) => design.candidate_id === selectedSite?.id);
+  const selectionStale = !!(selectedSite && selectedRun && selectedDesign
+    && (candidateInputSignature(picked ? { ...selectedSite, geometry: picked.geometry, latitude: picked.latitude, longitude: picked.longitude } : selectedSite)
+      !== candidateInputSignature(selectedRun.snapshot.candidate)
+      || designInputSignature(selectedDesign) !== designInputSignature(selectedRun.snapshot.design)));
   const modeRef = useRef(mode),
     overview = useRef(true);
   modeRef.current = mode;
@@ -196,19 +268,68 @@ export default function MapView({
     () => rankCandidates(candidates, designs, runs),
     [candidates, designs, runs],
   );
-  const counts = ranking.reduce(
-    (acc, r) => {
-      const g = r.stale ? "pending" : r.grade;
-      acc[g] = (acc[g] || 0) + 1;
-      return acc;
-    },
-    {} as Partial<Record<Grade, number>>,
-  );
   const distribution = useMemo(
     () =>
       buildDistribution(candidates, designs, runs, metric, selectedDesignId),
     [candidates, designs, runs, metric, selectedDesignId],
   );
+  function selectSavedSite(site: Candidate) {
+    if (latest.current.preparingSite) return;
+    latest.current.onSelectCandidate(site.id);
+    selectionAbort.current?.abort();
+    setSelectionError("");
+    setPicked(null);
+    setSiteTab("overview");
+    setShowSavedDetails(true);
+    setActiveFacility(null);
+  }
+  useEffect(() => {
+    const controller = new AbortController();
+    void api<PlantList>("/plants", { signal: controller.signal })
+      .then((data) => { if (!controller.signal.aborted) setPlants(Array.isArray(data.plants) ? data.plants : []); })
+      .catch(() => { if (!controller.signal.aborted) setPlantError("K-water 시설 위치를 불러오지 못했습니다."); });
+    return () => controller.abort();
+  }, []);
+  useEffect(() => {
+    if (!climateMode) return;
+    const controller = new AbortController();
+    void api<{ assets: { id: string; name: string; latitude: number | null; longitude: number | null; capacity_kw: number | null; site_type_raw: string | null; address: string | null }[] }>("/solartech/assets", { signal: controller.signal })
+      .then((data) => { if (!controller.signal.aborted) setAssets((data.assets || []).filter((asset) => asset.latitude != null && asset.longitude != null).map((asset) => ({
+        id: asset.id, name: asset.name, latitude: asset.latitude!, longitude: asset.longitude!, capacity_kw: asset.capacity_kw,
+        address: asset.address, source: "solartech", kind: asset.site_type_raw?.includes("수상") ? "water" : asset.site_type_raw?.match(/건축|옥상|지붕/)
+          ? "building" : asset.site_type_raw?.match(/지상|육상/)? "land" : "other",
+      }))); })
+      .catch(() => { if (!controller.signal.aborted) setPlantError("등록 설비정보의 위치를 불러오지 못했습니다."); });
+    return () => controller.abort();
+  }, [!!climateMode]);
+  useEffect(() => {
+    if (!ready || !map.current) return;
+    const group = L.layerGroup().addTo(map.current);
+    const facilities: MapFacility[] = [...plants.map((plant): MapFacility => ({ ...plant, plant, source: "kwater",
+      kind: plant.type === "floating" ? "water" : plant.type === "plant" || plant.type === "basin" ? "building" : "land" })), ...assets];
+    for (const facility of facilities) {
+      if (facilityHidden.includes(facility.kind) || facilityHidden.includes(facility.source)) continue;
+      const { kind } = facility;
+      const marker = L.marker([facility.latitude, facility.longitude], {
+        icon: L.divIcon({ className: `kwater-facility-icon ${kind}${climateMode ? " climate-facility-pin" : ""}`, html: `<span>${typeIconSvg(kind === "other" ? "building" : kind, 18)}</span>`,
+          iconSize: climateMode ? [34, 42] : [30, 30], iconAnchor: climateMode ? [17, 40] : [15, 15] }),
+        title: `${facility.source === "kwater" ? "K-water" : "등록 설비"} · ${facility.name}`, bubblingMouseEvents: false,
+      }).bindTooltip(label(facility.name, `${facility.source === "kwater" ? "K-water" : "등록 설비"} · ${num(facility.capacity_kw, 0)} kW`)).addTo(group);
+      marker.on("click", () => {
+        if (modeRef.current !== "view" || latest.current.preparingSite) return;
+        setPlantError("");
+        if (climateMode) {
+          setActiveFacility(facility); setPicked(null);
+          map.current?.setView([facility.latitude, facility.longitude], Math.max(map.current.getZoom(), 14), { animate: false });
+          return;
+        }
+        setPicked(null);
+        setSiteTab("potential");
+        if (facility.plant) void onPickPlant?.(facility.plant).catch((cause) => setPlantError(cause instanceof Error ? cause.message : "시설을 선택하지 못했습니다."));
+      });
+    }
+    return () => { group.remove(); };
+  }, [plants, assets, ready, onPickPlant, facilityHidden, !!climateMode]);
   useEffect(() => {
     if (!host.current) return;
     let instance: L.Map | undefined;
@@ -220,13 +341,22 @@ export default function MapView({
         maxZoom: 19,
         zoomControl: false,
         attributionControl: true,
-        preferCanvas: true,
+        // A full-viewport canvas intercepts lower panes even outside its paths.
+        // SVG lets the exact roof, land or water polygon receive the click.
+        preferCanvas: false,
         doubleClickZoom: false,
       });
       map.current = instance;
       instance.attributionControl.setPrefix(false);
       // Real water bodies sit beneath candidate boundaries.
       instance.createPane("water").style.zIndex = "350";
+      instance.createPane("objects-land").style.zIndex = "320";
+      instance.createPane("objects-water").style.zIndex = "330";
+      // Saved site fills must sit underneath individual building selections.
+      instance.createPane("objects-building").style.zIndex = "450";
+      instance.createPane("object-selection").style.zIndex = "460";
+      instance.createPane("regulations").style.zIndex = "340";
+      instance.getPane("regulations")!.style.pointerEvents = "none";
       const street = L.tileLayer(
         "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
         {
@@ -248,10 +378,14 @@ export default function MapView({
       );
       for (const layer of [street, satellite])
         layer.on("tileerror", () => setTileError(true));
-      street.addTo(instance);
+      satellite.addTo(instance);
       tiles.current = { street, satellite };
       instance.on("click", (event: L.LeafletMouseEvent) => {
         const current = latest.current;
+        if (modeRef.current === "view") {
+          clickSelection.current({ latitude: event.latlng.lat, longitude: event.latlng.lng });
+          return;
+        }
         if (!current.candidate) return;
         const point = [event.latlng.lng, event.latlng.lat];
         if (modeRef.current === "grid")
@@ -279,6 +413,8 @@ export default function MapView({
           : null;
       observer?.observe(host.current);
       return () => {
+        searchAbort.current?.abort();
+        selectionAbort.current?.abort();
         observer?.disconnect();
         instance?.remove();
         map.current = null;
@@ -296,18 +432,16 @@ export default function MapView({
     const m = map.current;
     if (!m || !ready) return;
     setMode("view");
+    setShowSavedDetails(true);
     setDraft([]);
     setTarget(null);
+    if (picked && candidate?.source?.includes(` · ${picked.id} · `)) return;
     // First visit: show every site so the ranking reads at a glance.
     const first = overview.current;
     overview.current = false;
     const bounds = candidate ? candidateBounds([candidate]) : null;
-    if (first && candidates.length > 1)
-      m.fitBounds(toBounds(candidateBounds(candidates) || KOREA), {
-        padding: [70, 70],
-        maxZoom: 13,
-        animate: false,
-      });
+    if (first)
+      m.setView(candidate ? [candidate.latitude, candidate.longitude] : [37.2635, 127.0288], 16, { animate: false });
     else if (bounds)
       m.fitBounds(toBounds(bounds), {
         padding: [60, 60],
@@ -346,9 +480,9 @@ export default function MapView({
           selected = c.id === candidate?.id;
         const select = () => {
           if (modeRef.current === "view")
-            latest.current.onSelectCandidate(c.id);
+            selectSavedSite(c);
         };
-        L.geoJSON(c.geometry, {
+        if (c.geometry) L.geoJSON(c.geometry, {
           style: {
             color: selected ? "#005596" : info.color,
             fillColor: info.color,
@@ -356,6 +490,7 @@ export default function MapView({
             weight: selected ? 3 : 2,
             dashArray: row.stale ? "5 4" : undefined,
           },
+          bubblingMouseEvents: false,
           interactive: mode === "view",
         })
           .on("click", select)
@@ -394,9 +529,24 @@ export default function MapView({
                 ? "분석 전"
                 : p.display_value;
       const select = () => {
-        if (modeRef.current === "view") latest.current.onSelectCandidate(p.id);
+        if (modeRef.current !== "view") return;
+        const site = candidates.find((item) => item.id === p.id);
+        if (site) selectSavedSite(site);
       };
       // The selected site's module layout stays visible; its name is in the page header.
+      if (climateMode) {
+        const item = candidates.find((entry) => entry.id === p.id);
+        if (!item) continue;
+        const kind = item.site_type === "floating" || item.site_type === "basin" ? "water" : item.site_type === "building" ? "building" : "land";
+        if (item.geometry) L.geoJSON(item.geometry, {
+          style: { color: selected ? "#facc15" : FIND[kind].stroke, fillColor: FIND[kind].fill, fillOpacity: overlayOpacity / 100,
+            weight: selected ? 2.5 : 1.2 }, interactive: mode === "view", bubblingMouseEvents: false,
+        }).on("click", select).addTo(group);
+        L.marker([item.latitude, item.longitude], { icon: L.divIcon({ className: `site-pin climate-candidate-pin ${kind}${selected ? " selected" : ""}`,
+          html: `<span>${typeIconSvg(kind, 16)}</span>`, iconSize: [30, 38], iconAnchor: [15, 36] }), interactive: mode === "view", bubblingMouseEvents: false })
+          .bindTooltip(label(item.name, "저장된 후보지"), { direction: "top" }).on("click", select).addTo(group);
+        continue;
+      }
       const coversLayout = selected && !!result?.layout?.modules?.length;
       const site =
         metric === "none" || coversLayout
@@ -410,6 +560,11 @@ export default function MapView({
           weight: selected ? 3 : 1.5,
           dashArray: p.status === "stale" ? "5 4" : undefined,
         },
+        bubblingMouseEvents: false,
+        pointToLayer: (_feature, latlng) => L.circleMarker(latlng, {
+          radius: selected ? 9 : 7, color: "#fff", weight: 2,
+          fillColor: p.color, fillOpacity: 1, bubblingMouseEvents: false,
+        }),
         interactive: mode === "view",
       })
         .on("click", select)
@@ -421,7 +576,7 @@ export default function MapView({
           direction: coversLayout ? "top" : "center",
           className: "map-label" + (selected ? " selected" : ""),
         });
-      if (site)
+      if (site?.geometry)
         L.circleMarker([site.latitude, site.longitude], {
           radius: selected ? 9 : 7,
           color: "#fff",
@@ -452,6 +607,8 @@ export default function MapView({
     mode,
     candidates,
     result,
+    !!climateMode,
+    overlayOpacity,
   ]);
   useEffect(() => {
     const m = map.current;
@@ -526,7 +683,7 @@ export default function MapView({
         }).addTo(group),
       );
     }
-    if (mode === "edit")
+    if (mode === "edit" && candidate.geometry)
       candidate.geometry.coordinates[0].slice(0, -1).forEach((p, i) => {
         const marker = L.marker([p[1], p[0]], {
           draggable: true,
@@ -539,7 +696,7 @@ export default function MapView({
         }).addTo(group);
         marker.on("dragend", () => {
           const current = latest.current.candidate;
-          if (!current) return;
+          if (!current?.geometry) return;
           const point = marker.getLatLng(),
             ring = current.geometry.coordinates[0].map((v) => [...v]);
           ring[i] = [point.lng, point.lat];
@@ -563,106 +720,236 @@ export default function MapView({
     if (!m || !ready || !shownKinds.length) return;
     const group = L.layerGroup().addTo(m);
     for (const kind of shownKinds) {
-      const layer = found[kind]!,
+      const layer = layers[kind]!,
         look = FIND[kind];
-      const [w, s, e, n] = layer.bbox;
-      L.rectangle(
-        [
-          [s, w],
-          [n, e],
-        ],
-        { pane: "water", color: look.stroke, weight: 1, dashArray: "6 6", fill: false, interactive: false },
-      ).addTo(group);
-      for (const body of layer.results) {
-        const active = picked?.id === body.id && picked.findKind === kind;
+      // Smaller outlines sit on top when a building has nested structures.
+      for (const body of [...layer.results].sort((a, b) => b.area_m2 - a.area_m2)) {
         const tip = label(waterName(body), `${look.label} · ${body.kind} · ${hectares(body.area_m2)} ha`);
         L.geoJSON(body.geometry, {
-          pane: "water",
+          pane: `objects-${kind}`,
           style: {
-            color: active ? look.active : look.stroke,
-            weight: active ? 3 : 1.5,
+            color: look.stroke,
+            weight: 1.5,
             fillColor: look.fill,
-            fillOpacity: active ? 0.55 : 0.35,
+            fillOpacity: overlayOpacity / 100,
+            className: `map-object object-${kind}`,
           },
+          bubblingMouseEvents: false,
           interactive: mode === "view",
         })
           .bindTooltip(tip, { sticky: true, className: "map-label" })
-          .on("click", () => setPicked({ ...body, findKind: kind }))
-          .addTo(group);
-        // A type pin keeps small roofs and plots findable when zoomed out.
-        L.marker([body.latitude, body.longitude], {
-          icon: L.divIcon({
-            className: `type-pin ${kind}${active ? " active" : ""}`,
-            html: typeIconSvg(kind, 13),
-            iconSize: [22, 22],
-            iconAnchor: [11, 11],
-          }),
-          keyboard: false,
-          interactive: mode === "view",
-        })
-          .bindTooltip(tip, { direction: "top", offset: [0, -10], className: "map-label" })
-          .on("click", () => setPicked({ ...body, findKind: kind }))
+          .on("click", (event: L.LeafletMouseEvent) => {
+            if (modeRef.current !== "view") return;
+            if (kind !== "building" && roofStatus === "loading" && !hidden.includes("building")) {
+              void identifyFeature({ latitude: event.latlng.lat, longitude: event.latlng.lng });
+              return;
+            }
+            selectSite({ ...body, findKind: kind });
+          })
           .addTo(group);
       }
     }
     return () => {
       group.remove();
     };
-  }, [found, hidden, picked, mode, ready]);
-  async function findWater() {
-    const m = map.current;
-    if (!m) return;
-    const b = m.getBounds(),
-      c = m.getCenter();
-    // Very wide views search the centre of the screen only.
-    const limit = FIND[findKind];
-    const halfW = Math.min((b.getEast() - b.getWest()) / 2, limit.width / 2),
-      halfH = Math.min((b.getNorth() - b.getSouth()) / 2, limit.height / 2);
-    const bbox: [number, number, number, number] = [
-      c.lng - halfW,
-      c.lat - halfH,
-      c.lng + halfW,
-      c.lat + halfH,
-    ].map((v) => Math.round(v * 10000) / 10000) as [number, number, number, number];
-    setWaterBusy(true);
-    setWaterError("");
-    setPicked(null);
-    setPanel("water");
+  }, [found, roofResults, roofStatus, hidden, mode, ready, overlayOpacity]);
+  useEffect(() => {
+    if (!map.current || !ready || !picked || hidden.includes(picked.findKind)) return;
+    // The fill must differ from the layer's own colour: a yellow outline and
+    // fill on the yellow land layer (or blue on water) showed no change.
+    const highlight = L.layerGroup([
+      L.geoJSON(picked.geometry, { pane: "object-selection", interactive: false,
+        style: { color: "#ffffff", weight: 7, opacity: .9, fill: false } }),
+      L.geoJSON(picked.geometry, { pane: "object-selection", interactive: false,
+        style: { color: "#facc15", weight: 3, fillColor: FIND[picked.findKind].selected, fillOpacity: .5,
+          className: `object-selected object-selected-${picked.findKind}` } }),
+    ]).addTo(map.current);
+    return () => { highlight.remove(); };
+  }, [picked, hidden, ready]);
+  useEffect(() => {
+    if (!map.current || !ready || !regionPoint) return;
+    const marker = L.circleMarker([regionPoint.latitude, regionPoint.longitude], {
+      pane: "object-selection", interactive: false, radius: 7, color: "#facc15", weight: 3, fillColor: "#ffffff", fillOpacity: 1,
+    }).addTo(map.current);
+    return () => { marker.remove(); };
+  }, [ready, regionPoint?.latitude, regionPoint?.longitude]);
+
+  useEffect(() => {
+    const control = map.current?.attributionControl;
+    if (!control || !roofLayer?.results.length || hidden.includes("building")) return;
+    const attribution = '<a href="https://docs.overturemaps.org/attribution/" target="_blank" rel="noopener noreferrer">Overture Maps Foundation</a>';
+    control.addAttribution(attribution);
+    return () => { control.removeAttribution(attribution); };
+  }, [roofLayer, hidden]);
+  function selectSite(site: Picked) {
+    if (latest.current.preparingSite) return;
+    selectionAbort.current?.abort();
+    setSelectionError("");
+    setSiteTab("overview");
+    setPicked(site);
+    setActiveFacility(null);
+  }
+  async function identifyFeature(point: { latitude: number; longitude: number }) {
+    if (latest.current.preparingSite) return;
+    selectionAbort.current?.abort();
+    setActiveFacility(null);
+    const area: RegionPick = { findKind: "region", ...point };
+    setSelectionError("");
+    if ((map.current?.getZoom() ?? 0) < 15 || point.latitude < 33 || point.latitude > 39 || point.longitude < 124 || point.longitude > 132) {
+      setPicked(area);
+      return;
+    }
+    const priority: Record<FindKind, number> = { building: 0, water: 1, land: 2 };
+    const local = sites.filter((site) => inRing(point.longitude, point.latitude, site.geometry.coordinates[0])
+      && !site.geometry.coordinates.slice(1).some((ring) => inRing(point.longitude, point.latitude, ring)))
+      .sort((a, b) => priority[a.findKind] - priority[b.findKind] || a.area_m2 - b.area_m2)[0];
+    if (local?.findKind === "building" || (local && (roofStatus !== "loading" || hidden.includes("building")))) {
+      selectSite(local);
+      return;
+    }
+    const controller = new AbortController();
+    selectionAbort.current = controller;
+    setPicked({ ...area, identifying: true });
     try {
-      const range = `west=${bbox[0]}&south=${bbox[1]}&east=${bbox[2]}&north=${bbox[3]}`;
-      const result = await api<WaterSearch>(
-        findKind === "water" ? `/water-bodies?${range}` : `/site-candidates?kind=${findKind}&${range}`,
-      );
-      setFound((prev) => ({ ...prev, [findKind]: { ...result, bbox } }));
-      setHidden((prev) => prev.filter((k) => k !== findKind));
+      const position = `latitude=${point.latitude}&longitude=${point.longitude}`;
+      if (!hidden.includes("building") && roofStatus !== "ready") {
+        const roof = await api<{ feature: MapFeature | null }>(`/roofprints/identify?${position}`, { signal: controller.signal })
+          .catch(() => null);
+        if (controller.signal.aborted) return;
+        if (roof?.feature?.feature_type === "building") {
+          selectSite(asPicked(roof.feature));
+          return;
+        }
+        if (local) { selectSite(local); return; }
+      }
+      const result = await api<{ feature: MapFeature | null; warning: string | null; attribution: string }>(
+        `/map-features/identify?${position}`, { signal: controller.signal });
+      if (controller.signal.aborted) return;
+      if (!result.feature) {
+        if (result.warning) setSelectionError(result.warning);
+        setPicked(area);
+        return;
+      }
+      const selected = asPicked(result.feature);
+      if (!KINDS.includes(selected.findKind)) throw new Error("선택한 경계의 유형을 확인하지 못했습니다.");
+      const { findKind: kind, ...body } = selected;
+      setFound((previous) => {
+        const old = previous[kind];
+        const results = [...(old?.results || []).filter((row) => row.id !== body.id), body];
+        const ring = body.geometry.coordinates[0];
+        return { ...previous, [kind]: { results, total: Math.max(old?.total || 0, results.length),
+          attribution: result.attribution, warning: null,
+          bbox: old?.bbox || [Math.min(...ring.map((p) => p[0])), Math.min(...ring.map((p) => p[1])), Math.max(...ring.map((p) => p[0])), Math.max(...ring.map((p) => p[1]))] } };
+      });
+      setHidden((old) => old.filter((value) => value !== kind));
+      selectSite(selected);
     } catch (cause) {
-      setWaterError(
-        cause instanceof Error ? cause.message : `${limit.obj} 찾지 못했습니다.`,
-      );
-    } finally {
-      setWaterBusy(false);
+      if (!controller.signal.aborted) {
+        setSelectionError(cause instanceof Error ? cause.message : "선택한 경계 정보를 확인하지 못했습니다.");
+        setPicked(area);
+      }
     }
   }
-  function showWater(body: Picked) {
-    setPicked(body);
-    const ring = body.geometry.coordinates[0];
-    map.current?.flyToBounds(
-      [
-        [Math.min(...ring.map((p) => p[1])), Math.min(...ring.map((p) => p[0]))],
-        [Math.max(...ring.map((p) => p[1])), Math.max(...ring.map((p) => p[0]))],
-      ],
-      { padding: [50, 50], maxZoom: 16, duration: 0.7 },
-    );
-  }
-  function navigate(location: SearchLocation) {
+  async function loadFeatures() {
     const m = map.current;
     if (!m) return;
+    const b = m.getBounds();
+    if (b.getEast() - b.getWest() > .08 || b.getNorth() - b.getSouth() > .06) return;
+    searchAbort.current?.abort();
+    const controller = new AbortController();
+    searchAbort.current = controller;
+    const version = ++searchVersion.current;
+    const bbox: [number, number, number, number] = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+    setWaterBusy(true);
+    setWaterError("");
+    setRoofStatus("loading");
+    const range = new URLSearchParams({ west: String(bbox[0]), south: String(bbox[1]), east: String(bbox[2]), north: String(bbox[3]) });
+    void api<{ results: MapFeature[]; attribution: string }>(`/roofprints?${range}`, { signal: controller.signal })
+      .then(({ results, attribution }) => {
+        if (!Array.isArray(results) || results.some((row) => row.feature_type !== "building")) throw new Error("Invalid building layer");
+        if (controller.signal.aborted) return;
+        setRoofLayer({ results: results.map(({ feature_type: _kind, ...body }) => body),
+          total: results.length, attribution, bbox, warning: null });
+        setRoofStatus("ready");
+      }).catch(() => { if (!controller.signal.aborted) setRoofStatus("unavailable"); });
+    try {
+      const result = await api<Omit<WaterSearch, "results"> & { results: MapFeature[] }>(`/map-features?${range}`, { signal: controller.signal });
+      if (controller.signal.aborted || version !== searchVersion.current) return;
+      if (!Array.isArray(result.results) || result.results.some((row) => !KINDS.includes(row.feature_type)))
+        throw new Error("지도 경계 응답을 확인하지 못했습니다. 다시 불러와 주세요.");
+      const next: Partial<Record<FindKind, FoundLayer>> = {};
+      for (const kind of KINDS) {
+        const results = result.results.filter((row) => row.feature_type === kind).map(({ feature_type: _kind, ...body }) => body);
+        next[kind] = { ...result, results, total: results.length, bbox };
+      }
+      setFound(next);
+    } catch (cause) {
+      if (!controller.signal.aborted) setWaterError(cause instanceof Error ? cause.message : "지도 경계를 불러오지 못했습니다.");
+    } finally {
+      if (version === searchVersion.current) setWaterBusy(false);
+    }
+  }
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !ready) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = () => {
+      clearTimeout(timer);
+      searchAbort.current?.abort();
+      setWaterBusy(false);
+      const b = m.getBounds();
+      const covered = KINDS.every((kind) => {
+        const box = foundLatest.current[kind]?.bbox;
+        return box && box[0] <= b.getWest() && box[1] <= b.getSouth() && box[2] >= b.getEast() && box[3] >= b.getNorth();
+      });
+      // Do not let an old, large land polygon intercept clicks on roofs/water
+      // whose details in the new viewport have not loaded yet.
+      if (!covered) setFound({});
+      setRoofLayer((previous) => {
+        const box = previous?.bbox;
+        return box && box[0] <= b.getWest() && box[1] <= b.getSouth() && box[2] >= b.getEast() && box[3] >= b.getNorth()
+          ? previous : null;
+      });
+      if (b.getEast() - b.getWest() > .08 || b.getNorth() - b.getSouth() > .06) {
+        setViewportHint("지도를 더 확대하면 누를 수 있는 건축물·지상·수상 경계가 함께 표시됩니다.");
+        return;
+      }
+      setViewportHint("");
+      setRoofStatus("loading");
+      if (modeRef.current !== "view") return;
+      timer = setTimeout(() => void loadFeatures(), 400);
+    };
+    m.on("moveend", refresh);
+    refresh();
+    return () => { clearTimeout(timer); m.off("moveend", refresh); searchAbort.current?.abort(); };
+  }, [ready, mode]);
+
+  useEffect(() => {
+    if (!map.current || !ready || !pickedPoint) return;
+    const marker = L.circleMarker([pickedPoint.latitude, pickedPoint.longitude], {
+      radius: 6, color: "#fff", fillColor: "#f97316", fillOpacity: 1, weight: 2,
+      interactive: false,
+    }).addTo(map.current);
+    return () => { marker.remove(); };
+  }, [ready, pickedPoint?.latitude, pickedPoint?.longitude]);
+
+  function navigate(location: SearchLocation) {
+    const m = map.current;
+    if (!m || latest.current.preparingSite) return;
     setTarget(location);
+    selectionAbort.current?.abort();
+    setSelectionError("");
+    setPicked(null);
+    setSiteTab("overview");
     setMode("view");
     setDraft([]);
+    if (location.kind === "place") {
+      m.setView([location.latitude, location.longitude], 17, { animate: false });
+      return;
+    }
     m.flyToBounds(toBounds(location.bbox), {
       padding: [40, 40],
-      maxZoom: location.kind === "place" ? 16 : 13,
+      maxZoom: 13,
       duration: 0.8,
     });
   }
@@ -710,6 +997,14 @@ export default function MapView({
     }
   }
   function showAll() {
+    if (climateMode === "generation") {
+      const facilities = [...plants, ...assets];
+      if (facilities.length) {
+        map.current?.flyToBounds(facilities.map((facility) => [facility.latitude, facility.longitude] as [number, number]), { padding: [65, 65], maxZoom: 13, duration: .7 });
+        setTarget(null);
+        return;
+      }
+    }
     map.current?.flyToBounds(toBounds(candidateBounds(candidates) || KOREA), {
       padding: [65, 65],
       maxZoom: 13,
@@ -727,30 +1022,61 @@ export default function MapView({
     setTarget(null);
   }
   const drawing = mode === "polygon" || mode === "exclusion";
+  const regulationPanel = <><div className="climate-layer-controls" hidden={!climateMode}>
+    <h3>{climateMode === "generation" ? "기존 태양광 시설" : "지도 표시 설정"}</h3>
+    <p className="climate-control-caption">시설 유형</p>
+    {([{ id: "building", label: "건축물·정수장", kind: "building" }, { id: "land", label: "지상 시설", kind: "land" },
+      { id: "water", label: "수상 시설", kind: "water" }, { id: "other", label: "유형 미등록", kind: "building" }] as const).map(({ id, label: text, kind }) =>
+      <label className={`climate-layer-row ${id}`} key={id}><input type="checkbox" checked={!facilityHidden.includes(id)} onChange={() => setFacilityHidden((old) => old.includes(id) ? old.filter((value) => value !== id) : [...old, id])} />
+        <i dangerouslySetInnerHTML={{ __html: typeIconSvg(kind, 15) }} />{text}</label>)}
+    <p className="climate-control-caption">자료 출처</p>
+    {([ ["kwater", "K-water 운영시설", plants.length], ["solartech", "등록 설비정보", assets.length] ] as const).map(([id, text, count]) =>
+      <label className="climate-layer-row" key={id}><input type="checkbox" checked={!facilityHidden.includes(id)} onChange={() => setFacilityHidden((old) => old.includes(id) ? old.filter((value) => value !== id) : [...old, id])} />{text}<span>{count}</span></label>)}
+    <p className="climate-control-caption">부지 경계</p>
+    {KINDS.map((kind) => <label className="climate-layer-row" key={kind}><input type="checkbox" checked={!hidden.includes(kind)} onChange={() => setHidden((old) => old.includes(kind) ? old.filter((value) => value !== kind) : [...old, kind])} />
+      <i className="boundary-key" style={{ background: FIND[kind].fill }} />{FIND[kind].label}<span>{layers[kind]?.total ?? "—"}</span></label>)}
+    <label className="climate-opacity">경계 채우기<input aria-label="부지 경계 불투명도" type="range" min={0} max={80} value={overlayOpacity} onChange={(e) => setOverlayOpacity(Number(e.target.value))} /><span>{overlayOpacity}%</span></label>
+    {climateMode === "potential" && <p className="climate-control-note">지도의 경계를 선택하면 해당 부지의 설치 잠재량을 계산합니다.</p>}
+  </div><Regulations map={ready ? map.current : null} hiddenPanel={!!climateMode && climateMode !== "regulations"} showLayers target={activeFacility ? {
+    name: activeFacility.name, latitude: activeFacility.latitude, longitude: activeFacility.longitude, geometry: null,
+  } : picked ? {
+    name: waterName(picked), latitude: picked.latitude, longitude: picked.longitude, geometry: picked.geometry,
+  } : regionPoint ? { name: "선택 위치", latitude: regionPoint.latitude, longitude: regionPoint.longitude, geometry: null }
+    : pickedPoint ? { name: "선택 좌표", ...pickedPoint, geometry: null } : candidate ? {
+      name: candidate.name, latitude: candidate.latitude, longitude: candidate.longitude, geometry: candidate.geometry,
+    } : null} /></>;
+  const facilityCandidate: Candidate | null = activeFacility ? { id: activeFacility.id, project_id: "", name: activeFacility.name,
+    latitude: activeFacility.latitude, longitude: activeFacility.longitude, geometry: null, exclusions: [], grid_point: null,
+    cable_distance_m: null, water_depth_m: null, water_level_m: null,
+    site_type: activeFacility.plant && activeFacility.plant.type !== "unknown" ? activeFacility.plant.type
+      : activeFacility.kind === "water" ? "floating" : activeFacility.kind === "building" ? "building" : "land", source: activeFacility.source,
+    reference_plant_id: activeFacility.source === "kwater" ? activeFacility.id : null,
+    solartech_asset_id: activeFacility.source === "solartech" ? activeFacility.id : null } : null;
+  const selectionProps: ComponentProps<typeof SelectedSite> = {
+    site: picked ? (({ findKind: _kind, ...body }) => body)(picked) : null,
+    regionPoint: activeFacility || regionPoint || (!picked && showSavedDetails ? candidate : null) || (climateMode ? center : null),
+    siteType: pickedType, savedName: activeFacility?.name || (selectedSite?.name.startsWith("이름 없는 ") ? undefined : selectedSite?.name),
+    savedCandidate: facilityCandidate || selectedSite, savedDesign: activeFacility ? undefined : selectedDesign,
+    tab: !picked && !regionPoint && candidate && activeSiteTab === "overview" ? "potential" : activeSiteTab,
+    onTab: setSiteTab, loading: selectionLoading, error: selectionError, run: activeFacility ? null : selectedRun,
+    stale: selectionStale, pending: siteRuns.some((run) => run.status === "pending" || run.status === "running"), preparing: preparingSite,
+    onContinue: onContinueSite ? (body) => onContinueSite(body, pickedType, selectedDesign?.id) : undefined,
+    onClose: () => { selectionAbort.current?.abort(); setSelectionError(""); setPicked(null); setSiteTab("overview"); setShowSavedDetails(false); },
+    onZoom: () => { const m = map.current; if (m) m.setZoom(Math.max(m.getZoom(), 17)); },
+    onOpenGyeonggi: () => navigate({ id: "suwon-city-hall", label: "수원시청", latitude: 37.2635, longitude: 127.0288,
+      bbox: [127.025, 37.26, 127.032, 37.267], source: "local", kind: "place" }),
+  };
+  useEffect(() => { if (infoPanel.current) infoPanel.current.scrollTop = 0; }, [picked?.id, regionPoint?.latitude, regionPoint?.longitude, activeSiteTab]);
+  useEffect(() => {
+    if (selectionLoading || (!picked && !regionPoint) || !window.matchMedia?.("(max-width: 800px)").matches) return;
+    infoPanel.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+  }, [picked?.id, regionPoint?.latitude, regionPoint?.longitude, selectionLoading]);
   return (
-    <div className="map">
+    <div className={`map${climateMode ? ` climate-map view-${climateMode}` : ""}`}>
+      {regulationContainer ? createPortal(regulationPanel, regulationContainer) : regulationContainer === undefined ? regulationPanel : null}
       <div className="map-toolbar">
         <MapSearch onSelect={navigate} />
         <div className="map-toolbar-actions">
-          <select
-            aria-label="찾을 후보 종류"
-            value={findKind}
-            onChange={(e) => setFindKind(e.target.value as FindKind)}
-            disabled={waterBusy}
-          >
-            <option value="water">수면</option>
-            <option value="land">지상 부지</option>
-            <option value="building">건축물</option>
-          </select>
-          <button
-            className="btn water"
-            onClick={() => void findWater()}
-            disabled={!ready || waterBusy}
-            title={`지금 보이는 지도 범위에서 ${FIND[findKind].label} 후보를 OpenStreetMap으로 찾습니다`}
-          >
-            {waterBusy && <span className="spinner" />}
-            {waterBusy ? `${FIND[findKind].label} 찾는 중…` : `이 지역 ${FIND[findKind].label} 찾기`}
-          </button>
           <button
             className="btn"
             onClick={focus}
@@ -771,6 +1097,25 @@ export default function MapView({
             후보지 추가
           </button>
         </div>
+      </div>
+      {!climateMode && <div className="map-discovery-note">
+        <div className="map-object-toggles" role="group" aria-label="표시할 지도 경계">
+          {KINDS.map((kind) => <label key={kind}>
+            <input type="checkbox" checked={!hidden.includes(kind)} onChange={() => setHidden((old) =>
+              old.includes(kind) ? old.filter((value) => value !== kind) : [...old, kind])} />
+            <i style={{ background: FIND[kind].fill }} />{kind === "water" ? "수상" : FIND[kind].label}
+            {layers[kind] && <span>{layers[kind]!.total}</span>}
+          </label>)}
+        </div>
+        <span>표시된 경계를 바로 클릭하세요. 해당 건축물·지상·수상 자체를 기준으로 예측합니다.</span>
+      </div>}
+      <div className="map-feature-status" role="status">
+        {plantError && <span>{plantError}</span>}
+        {waterBusy ? <><span className="spinner" />건축물·지상·수상 경계를 함께 불러오는 중…</> : waterError ? <>
+          <span>{waterError}</span><button className="btn" onClick={() => void loadFeatures()}>다시 불러오기</button>
+        </> : viewportHint || `이 화면의 지도 경계 ${foundTotal}개 · 지도 이동·확대 시 자동으로 갱신됩니다.`}
+        {!viewportHint && roofStatus === "loading" && <span>추가 건축물 경계 조회 중…</span>}
+        {!viewportHint && roofStatus === "unavailable" && <span>추가 건축물 자료 연결 실패 · OpenStreetMap 경계 표시</span>}
       </div>
       {candidate && (
         <div className="map-modes" role="toolbar" aria-label="지도 편집 도구">
@@ -793,7 +1138,11 @@ export default function MapView({
       )}
       <div className="map-body">
       <div className="map-canvas">
-        <div className="map-host" ref={host} aria-label="수면 후보지 지도" />
+        <div className="map-host" ref={host} aria-label="태양광 후보지 지도" />
+        {climateMode && <div className="climate-map-title"><span>{climateMode === "potential" ? "설치 잠재량" : climateMode === "generation" ? "태양광 발전현황" : "규제요인 검토"}</span><small>{plants.length + assets.length}개 등록 시설 · 선택 부지 분석</small></div>}
+        {climateMode && activeFacility && <div className="climate-map-popup"><FacilityPopup facility={activeFacility} onClose={() => setActiveFacility(null)}
+          onReview={activeFacility.plant && onPickPlant ? () => { void onPickPlant(activeFacility.plant!).catch((cause) => setPlantError(String(cause))); setActiveFacility(null); } : undefined} /></div>}
+        {climateMode && !activeFacility && picked && <div className="climate-map-popup"><SelectedSite {...selectionProps} tab="overview" /></div>}
         {mode !== "view" && (
           <div className="map-hint">
             <span>{hints[mode]}</span>
@@ -823,37 +1172,6 @@ export default function MapView({
               }}
             >
               {mode === "edit" ? "완료" : "취소"}
-            </button>
-          </div>
-        )}
-        {picked && mode === "view" && (
-          <div className="water-card">
-            <div>
-              <strong>
-                <TypeIcon kind={picked.findKind} /> {waterName(picked)}
-              </strong>
-              <span>
-                {FIND[picked.findKind].label} · {picked.kind} · {hectares(picked.area_m2)} ha
-              </span>
-            </div>
-            {onAddWater && (
-              <button
-                className="btn primary"
-                onClick={() => {
-                  const { findKind: kind, ...body } = picked;
-                  onAddWater(body, FIND[kind].siteType);
-                  setPicked(null);
-                }}
-              >
-                이 {FIND[picked.findKind].obj} 후보지로 추가
-              </button>
-            )}
-            <button
-              className="close"
-              aria-label="선택 해제"
-              onClick={() => setPicked(null)}
-            >
-              ×
             </button>
           </div>
         )}
@@ -914,189 +1232,11 @@ export default function MapView({
           </div>
         )}
       </div>
-      <aside className="rank-panel" aria-label="후보지 사업성 순위">
-        {(foundTotal > 0 || KINDS.some((k) => found[k]) || waterBusy || waterError) && (
-          <div className="panel-tabs" role="tablist">
-            <button
-              role="tab"
-              aria-selected={panel === "rank"}
-              className={panel === "rank" ? "active" : ""}
-              onClick={() => setPanel("rank")}
-            >
-              사업성 순위
-            </button>
-            <button
-              role="tab"
-              aria-selected={panel === "water"}
-              className={panel === "water" ? "active" : ""}
-              onClick={() => setPanel("water")}
-            >
-              찾은 후보 {foundTotal}
-            </button>
-          </div>
-        )}
-        {panel === "water" ? (
-          <div className="water-list">
-            {waterBusy ? (
-              <p className="panel-status">
-                <span className="spinner" />
-                OpenStreetMap에서 {FIND[findKind].busy}를 받는 중입니다. 처음 찾는
-                지역은 30초~1분 걸릴 수 있습니다.
-              </p>
-            ) : waterError ? (
-              <div className="panel-status error">
-                {waterError}
-                <button className="btn" onClick={() => void findWater()}>
-                  다시 찾기
-                </button>
-              </div>
-            ) : KINDS.some((k) => found[k]) ? (
-              <>
-                <div className="type-toggles" role="group" aria-label="표시할 후보 유형">
-                  {KINDS.filter((k) => found[k]).map((k) => (
-                    <label key={k} className={`type-toggle ${k}`}>
-                      <input
-                        type="checkbox"
-                        checked={!hidden.includes(k)}
-                        onChange={() =>
-                          setHidden((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]))
-                        }
-                      />
-                      <TypeIcon kind={k} />
-                      {FIND[k].label} {found[k]!.total}
-                    </label>
-                  ))}
-                </div>
-                <p className="rank-note">
-                  아이콘과 색이 설치 유형입니다(물결 수면 · 깃발 지상 부지 · 건물 건축물). 위에서 종류를 바꿔
-                  찾으면 결과가 함께 쌓입니다. 클릭하면 지도에서 보여 주고, 후보지로 추가할 수 있습니다.
-                </p>
-                {sites.length ? (
-                  <ol>
-                    {sites.map((body) => (
-                      <li key={body.findKind + body.id}>
-                        <button
-                          className={picked?.id === body.id && picked.findKind === body.findKind ? "active" : ""}
-                          onClick={() => showWater(body)}
-                        >
-                          <span className={`type-chip ${body.findKind}`}>
-                            <TypeIcon kind={body.findKind} />
-                            {FIND[body.findKind].label}
-                          </span>
-                          <span className="rank-body">
-                            <b>{waterName(body)}</b>
-                            <small>
-                              {body.kind} · {hectares(body.area_m2)} ha
-                            </small>
-                          </span>
-                        </button>
-                      </li>
-                    ))}
-                  </ol>
-                ) : (
-                  <p className="panel-status">선택한 유형에 표시할 후보가 없습니다.</p>
-                )}
-                {KINDS.filter((k) => found[k] && !found[k]!.results.length).map((k) => (
-                  <p className="rank-note" key={k}>
-                    {found[k]!.warning || FIND[k].empty}
-                  </p>
-                ))}
-                {KINDS.filter((k) => found[k] && found[k]!.total > found[k]!.results.length).map((k) => (
-                  <p className="rank-note" key={k}>
-                    {FIND[k].label}은 면적이 큰 {found[k]!.results.length}곳만 표시합니다. 지도를 확대해 다시 찾으면 더 작은
-                    곳도 볼 수 있습니다.
-                  </p>
-                ))}
-                {KINDS.filter((k) => found[k]).map((k) => (
-                  <p className="rank-note" key={k}>
-                    {FIND[k].note} {found[k]!.attribution}
-                  </p>
-                ))}
-              </>
-            ) : (
-              <p className="panel-status">{FIND[findKind].empty}</p>
-            )}
-          </div>
-        ) : (
-          <>
-        <div className="rank-head">
-          <h4>사업성 순위</h4>
-          <span>B/C 높은 순</span>
-        </div>
-        <div className="rank-summary">
-          {(Object.keys(gradeInfo) as Grade[])
-            .filter((g) => counts[g])
-            .map((g) => (
-              <span
-                key={g}
-                style={{ color: gradeInfo[g].color, background: gradeInfo[g].soft }}
-              >
-                {gradeInfo[g].label} {counts[g]}
-              </span>
-            ))}
-        </div>
-        <ol>
-          {ranking.map((row) => {
-            const e = row.run?.result?.economics,
-              info = gradeInfo[row.stale ? "pending" : row.grade];
-            return (
-              <li key={row.candidate.id}>
-                <button
-                  className={
-                    (row.candidate.id === candidate?.id ? "active " : "") +
-                    (row.rank === 1 ? "top" : "")
-                  }
-                  onClick={() => {
-                    latest.current.onSelectCandidate(row.candidate.id);
-                    if (row.candidate.id === candidate?.id) focus();
-                  }}
-                >
-                  <span className="rank-no">{row.rank ?? "–"}</span>
-                  <span className="rank-body">
-                    <b>{row.candidate.name}</b>
-                    <small>
-                      {e
-                        ? `B/C ${num(e.bc, 2)} · NPV ${num(e.npv / 100000000, 1)}억 원`
-                        : row.stale
-                          ? "조건이 바뀌어 다시 분석해야 합니다"
-                          : "아직 분석하지 않았습니다"}
-                    </small>
-                    {row.design && <small>최적 대안: {row.design.name}</small>}
-                    {water &&
-                      !onWater(row.candidate, water.results) &&
-                      inRing(row.candidate.longitude, row.candidate.latitude, [
-                        [water.bbox[0], water.bbox[1]],
-                        [water.bbox[2], water.bbox[1]],
-                        [water.bbox[2], water.bbox[3]],
-                        [water.bbox[0], water.bbox[3]],
-                      ]) && (
-                        <small className="off-water">
-                          지도상 수면 밖에 있습니다
-                        </small>
-                      )}
-                  </span>
-                  <span
-                    className="grade-badge"
-                    style={{ color: info.color, background: info.soft }}
-                  >
-                    {row.stale ? "재분석" : info.label}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ol>
-        {onAnalyzeAll && ranking.some((r) => !r.run) && (
-          <button className="btn block" onClick={onAnalyzeAll}>
-            전체 대안 분석하기
-          </button>
-        )}
-        <p className="rank-note">
-          추천 = B/C 1.2 이상·NPV 0 초과. 사전 검토용 등급이며 인허가·계통·수심
-          조건은 반영되지 않았습니다.
-        </p>
-          </>
-        )}
+      <aside className={`rank-panel${climateMode ? " climate-summary" : ""}`} aria-label="선택 부지 상세 정보" ref={infoPanel}>
+        {climateMode === "regulations" ? <div className="climate-regulation-intro"><span>REGULATION CHECK</span><h3>선택 부지 규제 검토</h3><p>지도에서 경계를 선택하면 왼쪽 패널에서 전체 경계의 규제 중첩을 확인합니다.</p><ol><li>지도에서 부지 선택</li><li>규제 중첩·미확인 항목 확인</li><li>자료 출처에서 상세 조건 확인</li></ol><small>규제자료는 경기도 제공 범위입니다. 미확인 지역을 설치 가능으로 판정하지 않습니다.</small></div>
+          : <SelectedSite {...selectionProps} key={picked ? `${picked.findKind}/${picked.id}` : regionPoint ? `${regionPoint.latitude}/${regionPoint.longitude}` : activeFacility?.id || candidate?.id || "no-selection"}
+              summaryOnly={!!climateMode} tab={climateMode || selectionProps.tab} />}
+
       </aside>
       </div>
       <div className="map-legend">

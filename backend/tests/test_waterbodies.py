@@ -106,7 +106,7 @@ def test_land_and_building_search_classifies_filters_and_caches_apart_from_water
     # Repeat views are served from the per-layer cache; the reservoir seed lookup does not see these files.
     sitefinder.find_sites("building", 127.001, 36.001, 127.049, 36.049)
     assert len(queries) == 2
-    assert not list((tmp_path / "water").glob("*.json")) and list((tmp_path / "water" / "building-v2").glob("*.json"))
+    assert not list((tmp_path / "water").glob("*.json")) and list((tmp_path / "water" / "building-v3").glob("*.json"))
 
 
 def test_site_search_limits_and_api(monkeypatch, tmp_path):
@@ -137,6 +137,33 @@ def test_adjacent_small_buildings_are_individually_selectable(monkeypatch):
     assert {row["id"] for row in rows} == {"way/21", "way/22"}
 
 
+def test_click_identifies_covering_building_and_returns_registered_attributes(monkeypatch, tmp_path):
+    payload = {"elements": [{"type": "way", "id": 30, "geometry": ring(127, 36, .001),
+        "tags": {"building": "office", "name": "선택 건물", "addr:street": "테스트로", "addr:housenumber": "10",
+                 "building:levels": "5", "height": "18", "roof:shape": "flat"}}]}
+    monkeypatch.setattr(waterbodies, "_request", lambda query: payload)
+    selected = sitefinder.building_at(36.0005, 127.0005)["building"]
+    assert selected["name"] == "선택 건물" and selected["kind"] == "업무시설"
+    assert selected["building_info"] == {"address": "테스트로 10", "levels": "5", "height": "18", "roof_shape": "flat"}
+    with waterbodies._lock:  # cached clicks bypass a pending viewport's network lock
+        assert sitefinder.building_at(36.0005, 127.0005)["building"]["id"] == "way/30"
+    assert sitefinder.building_at(36.0, 127.0)["building"]["id"] == "way/30"  # boundary point
+    assert sitefinder.building_at(36.0015, 127.0005)["building"] is None  # no nearest-roof substitution
+    client = TestClient(create_app(LocalRepository(str(tmp_path / "db.sqlite3"))))
+    assert client.get("/api/site-candidates/building-at", params={"latitude": 36.0005, "longitude": 127.0005}).json()["building"]["id"] == "way/30"
+    assert client.get("/api/site-candidates/building-at", params={"latitude": 1, "longitude": 127}).status_code == 422
+
+
+def test_building_courtyard_is_not_selected_as_roof(monkeypatch):
+    payload = {"elements": [{"type": "relation", "id": 31, "tags": {"building": "yes"}, "members": [
+        {"type": "way", "role": "outer", "geometry": ring(127, 36, .001)},
+        {"type": "way", "role": "inner", "geometry": ring(127.0004, 36.0004, .00005)},
+    ]}]}
+    monkeypatch.setattr(waterbodies, "_request", lambda query: payload)
+    assert sitefinder.building_at(36.00042, 127.00042)["building"] is None
+    assert sitefinder.building_at(36.0002, 127.0002)["building"] is not None
+
+
 def test_kakao_results_cover_apartments(monkeypatch):
     monkeypatch.setenv("GEOCODING_PROVIDER", "kakao")
     monkeypatch.setenv("KAKAO_REST_API_KEY", "test-key")
@@ -156,3 +183,40 @@ def test_kakao_without_key_explains_setup(monkeypatch):
     monkeypatch.delenv("KAKAO_REST_API_KEY", raising=False)
     monkeypatch.setattr(geocoding, "_request_kakao", lambda query: pytest.fail("No key, no request"))
     assert "KAKAO_REST_API_KEY" in geocoding.search_places("래미안아파트")["warning"]
+
+
+_ORIGINAL_REQUEST = waterbodies._request
+
+
+def _status_error(url, code):
+    request = waterbodies.httpx.Request("POST", url)
+    return waterbodies.httpx.HTTPStatusError("busy", request=request, response=waterbodies.httpx.Response(code, request=request))
+
+
+def test_overpass_gateway_errors_get_one_more_round(monkeypatch):
+    calls = []
+
+    def fetch(url, query):
+        calls.append(url)
+        if len(calls) <= len(waterbodies.OVERPASS_URLS):
+            raise _status_error(url, 504)
+        return PAYLOAD
+
+    monkeypatch.setattr(waterbodies, "_fetch", fetch)
+    monkeypatch.setattr(waterbodies, "RETRY_DELAY", 0)
+    assert _ORIGINAL_REQUEST("q") == PAYLOAD
+    assert len(calls) > len(waterbodies.OVERPASS_URLS)  # a second round was sent
+
+
+def test_overpass_client_errors_are_not_retried(monkeypatch):
+    calls = []
+
+    def fetch(url, query):
+        calls.append(url)
+        raise _status_error(url, 400)
+
+    monkeypatch.setattr(waterbodies, "_fetch", fetch)
+    monkeypatch.setattr(waterbodies, "RETRY_DELAY", 0)
+    with pytest.raises(waterbodies.httpx.HTTPStatusError):
+        _ORIGINAL_REQUEST("q")
+    assert len(calls) == len(waterbodies.OVERPASS_URLS)
